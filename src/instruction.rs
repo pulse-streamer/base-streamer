@@ -22,13 +22,12 @@
 
 use std::cmp::Ordering;
 use std::fmt;
-use crate::fn_lib_tools::FnTraitSet;
-
+use std::fmt::{Display, Debug};
 
 /// Struct containing function and start/end edge data of the instruction.
 ///
 /// # Fields:
-/// - `instr` - the function struct
+/// - `func` - the function struct
 ///
 /// - `start_pos` - beginning of the instruction interval
 ///
@@ -48,14 +47,14 @@ use crate::fn_lib_tools::FnTraitSet;
 /// - If `end_spec` is `None`, the next instruction must start no earlier than `start_pos + 1`
 ///
 /// # Ordering
-/// `InstrBook` implements ordering based on `start_pos` to facilitate sorting.
+/// `Instr` implements ordering based on `start_pos` to facilitate sorting.
 ///
-pub struct Instr {
-    pub start_pos: usize,
-    pub end_spec: Option<(usize, bool)>,
-    pub func: Box<dyn FnTraitSet>,
+pub struct Instr<F> {
+    start_pos: usize,
+    end_spec: Option<(usize, bool)>,
+    func: F,
 }
-impl Instr {
+impl<F> Instr<F> {
     /// Constructs a new `InstrBook` object.
     ///
     /// Checks that `end_pos` is strictly greater than `start_pos`.
@@ -89,7 +88,7 @@ impl Instr {
     ///
     /// The panic message will be:
     /// `Instruction { /* ... */ } end_pos 5 should be strictly greater than start_pos 5`.
-    pub fn new(start_pos: usize, end_spec: Option<(usize, bool)>, func: Box<dyn FnTraitSet>) -> Self {
+    pub fn new(start_pos: usize, end_spec: Option<(usize, bool)>, func: F) -> Self {
         if let Some((end_pos, _keep_val)) = &end_spec {
             // Sanity check - the smallest permissible instruction length is 1 tick
             assert!(
@@ -135,25 +134,27 @@ impl Instr {
         }
     }
 }
+
 // Support total ordering for Instr
-impl Ord for Instr {
+impl<F> Ord for Instr<F> {
     fn cmp(&self, other: &Self) -> Ordering {
         // We reverse the order to make BinaryHeap a min-heap based on start_pos
         self.start_pos.cmp(&other.start_pos)
     }
 }
-impl PartialOrd for Instr {
+impl<F> PartialOrd for Instr<F> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
-impl PartialEq for Instr {
+impl<F> PartialEq for Instr<F> {
     fn eq(&self, other: &Self) -> bool {
         self.start_pos == other.start_pos
     }
 }
-impl Eq for Instr {}
-impl fmt::Display for Instr {
+impl<F> Eq for Instr<F> {}
+
+impl<F: Debug> Display for Instr<F> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let end_spec = match self.end_spec {
             Some((end_pos, keep_val)) => format!("end_pos={end_pos}, keep_val={keep_val}"),
