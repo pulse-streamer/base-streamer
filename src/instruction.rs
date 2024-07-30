@@ -23,6 +23,7 @@
 use std::cmp::Ordering;
 use std::fmt;
 use std::fmt::{Display, Debug};
+use crate::fn_lib_tools::FnTraitSet;
 
 /// Struct containing function and start/end edge data of the instruction.
 ///
@@ -49,12 +50,12 @@ use std::fmt::{Display, Debug};
 /// # Ordering
 /// `Instr` implements ordering based on `start_pos` to facilitate sorting.
 ///
-pub struct Instr<F> {
+pub struct Instr<T> {
     start_pos: usize,
     end_spec: Option<(usize, bool)>,
-    func: F,
+    func: Box<dyn FnTraitSet<T>>,
 }
-impl<F> Instr<F> {
+impl<T> Instr<T> {
     /// Constructs a new `InstrBook` object.
     ///
     /// Checks that `end_pos` is strictly greater than `start_pos`.
@@ -88,7 +89,7 @@ impl<F> Instr<F> {
     ///
     /// The panic message will be:
     /// `Instruction { /* ... */ } end_pos 5 should be strictly greater than start_pos 5`.
-    pub fn new(start_pos: usize, end_spec: Option<(usize, bool)>, func: F) -> Self {
+    pub fn new(start_pos: usize, end_spec: Option<(usize, bool)>, func: Box<dyn FnTraitSet<T>>) -> Self {
         if let Some((end_pos, _keep_val)) = &end_spec {
             // Sanity check - the smallest permissible instruction length is 1 tick
             assert!(
@@ -136,25 +137,25 @@ impl<F> Instr<F> {
 }
 
 // Support total ordering for Instr
-impl<F> Ord for Instr<F> {
+impl<T> Ord for Instr<T> {
     fn cmp(&self, other: &Self) -> Ordering {
         // We reverse the order to make BinaryHeap a min-heap based on start_pos
         self.start_pos.cmp(&other.start_pos)
     }
 }
-impl<F> PartialOrd for Instr<F> {
+impl<T> PartialOrd for Instr<T> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
-impl<F> PartialEq for Instr<F> {
+impl<T> PartialEq for Instr<T> {
     fn eq(&self, other: &Self) -> bool {
         self.start_pos == other.start_pos
     }
 }
-impl<F> Eq for Instr<F> {}
+impl<T> Eq for Instr<T> {}
 
-impl<F: Debug> Display for Instr<F> {
+impl<T> Display for Instr<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let end_spec = match self.end_spec {
             Some((end_pos, keep_val)) => format!("end_pos={end_pos}, keep_val={keep_val}"),
