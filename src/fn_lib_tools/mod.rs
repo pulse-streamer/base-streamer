@@ -7,23 +7,23 @@ use std::fmt::Debug;
 
 pub mod usr_lib_prelude;
 
-pub trait Calc {
-    fn calc(&self, x_arr: ArrayViewMut1<f64>);
+pub trait Calc<T> {
+    fn calc(&self, x_arr: ArrayViewMut1<T>);
 }
 
-pub trait FnTraitSet: Calc + Debug + Send {
-    fn clone_to_box(&self) -> Box<dyn FnTraitSet>;
+pub trait FnTraitSet<T>: Calc<T> + Debug + Send {
+    fn clone_to_box(&self) -> Box<dyn FnTraitSet<T>>;
 }
 
-impl<T> FnTraitSet for T
-    where T: Calc + Clone + Debug + Send + 'static
+impl<S, T> FnTraitSet<T> for S
+    where S: Calc<T> + Clone + Debug + Send + 'static
 {
-    fn clone_to_box(&self) -> Box<dyn FnTraitSet> {
+    fn clone_to_box(&self) -> Box<dyn FnTraitSet<T>> {
         Box::new(self.clone())
     }
 }
 
-impl Clone for Box<dyn FnTraitSet> {
+impl<T> Clone for Box<dyn FnTraitSet<T>> {
     fn clone(&self) -> Self {
         self.clone_to_box()
     }
@@ -31,6 +31,12 @@ impl Clone for Box<dyn FnTraitSet> {
 
 #[pyclass]
 #[derive(Clone)]
-pub struct FnBox {
-    pub inner: Box<dyn FnTraitSet>
+pub struct FnBoxF64 {
+    pub inner: Box<dyn FnTraitSet<f64>>
 }
+
+// #[pyclass]
+// #[derive(Clone)]
+// pub struct FnBoxBool {
+//     pub inner: Box<dyn FnTraitSet<bool>>
+// }

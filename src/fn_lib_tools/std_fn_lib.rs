@@ -1,7 +1,7 @@
 use ndarray::ArrayViewMut1;
 use pyo3::prelude::*;
 use fn_lib_macros::std_fn;
-use crate::fn_lib_tools::{Calc, FnBox};
+use crate::fn_lib_tools::{Calc, FnBoxF64};
 
 #[pyclass]
 pub struct StdFnLib {}
@@ -22,7 +22,7 @@ pub struct LinFn {
     a: f64,
     b: f64,
 }
-impl Calc for LinFn {
+impl Calc<f64> for LinFn {
     fn calc(&self, mut x_arr: ArrayViewMut1<f64>) {
         x_arr.map_inplace(|x|
             (*x) = self.a * (*x) + self.b
@@ -42,7 +42,7 @@ pub struct Sine {
     phase: f64,
     offs: f64,
 }
-impl Calc for Sine {
+impl Calc<f64> for Sine {
     fn calc(&self, mut x_arr: ArrayViewMut1<f64>) {
         x_arr.map_inplace(|x|
             (*x) = self.offs + self.amp * f64::sin(2.0*std::f64::consts::PI * self.freq * (*x) + self.phase)

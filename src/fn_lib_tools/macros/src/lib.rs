@@ -105,9 +105,9 @@ fn lib_fn_macro_base(target_lib: &str, attr_tokens: TokenStream, input_tokens: T
             #[allow(non_snake_case)]
             #doc_tokens
             #[pyo3(signature = (#pyo3_sig_tokens))]
-            pub fn #struct_ident(&self, #(#field_ident_ty_tokens),*) -> PyResult<FnBox> {
+            pub fn #struct_ident(&self, #(#field_ident_ty_tokens),*) -> PyResult<FnBoxF64> {
                 let fn_inst = #struct_ident::new(#(#field_idents),*);
-                let fn_box = FnBox { inner: Box::new(fn_inst)};
+                let fn_box = FnBoxF64 { inner: Box::new(fn_inst)};
                 Ok(fn_box)
             }
         }
