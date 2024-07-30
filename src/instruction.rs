@@ -161,8 +161,8 @@ impl fmt::Display for Instr {
         };
         write!(
             f,
-            "InstrBook(start_pos={}, {})",  // ToDo: a way to implement Display for Box<dyn FnTraitSet>
-            self.start_pos, end_spec
+            "Instr(func={:?}, start_pos={}, {})",  // ToDo: a way to implement Display for Box<dyn FnTraitSet>
+            self.func, self.start_pos, end_spec
         )
     }
 }

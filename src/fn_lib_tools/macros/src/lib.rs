@@ -115,7 +115,7 @@ fn lib_fn_macro_base(target_lib: &str, attr_tokens: TokenStream, input_tokens: T
     // println!("pymethods_impl_userlib_tokens: \n{}\n", pymethods_impl_userlib_tokens);
 
     let full_tokens = quote!{
-        #[derive(Clone)]
+        #[derive(Clone, Debug)]
         #input_tokens2
 
         #impl_pub_fn_new_tokens
