@@ -1,4 +1,4 @@
-use ndarray::ArrayViewMut1;
+use ndarray::{ArrayViewMut1, ArrayView1};
 use pyo3::prelude::*;
 
 mod std_fn_lib;
@@ -8,7 +8,7 @@ use std::fmt::Debug;
 pub mod usr_lib_prelude;
 
 pub trait Calc<T> {
-    fn calc(&self, x_arr: ArrayViewMut1<T>);
+    fn calc(&self, t_arr: &ArrayView1<f64>, res_arr: ArrayViewMut1<T>);
 }
 
 pub trait FnTraitSet<T>: Calc<T> + Debug + Send {
