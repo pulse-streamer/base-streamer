@@ -179,9 +179,11 @@
 //!
 //! We encourage users to explore each module to fully grasp the capabilities and structure of the crate. Whether you're here for a quick setup or to contribute, the `nicompiler_backend` crate is designed to cater to both needs.
 
+extern crate ndarray;
+
 pub mod fn_lib_tools;
 pub mod instruction;
-// pub mod channel;
+pub mod channel;
 // pub mod device;
 // pub mod streamer;
 // pub mod utils;

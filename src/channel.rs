@@ -63,18 +63,36 @@
 //! AO channels are both streamable and editable. DO line channels are editable but not streamable, and DO port
 //! channels are non-editable yet streamable.
 
-use ndarray::{array, s, Array1};
+use ndarray::{s, Array1, ArrayView1, ArrayViewMut1};
 use std::collections::BTreeSet;
+use std::fmt::{Debug, Formatter};
 
-use crate::instruction::*;
+use crate::instruction::Instr;
+use crate::fn_lib_tools::{FnTraitSet, Calc};
 
-/// Enum type for NI tasks. Channels are associated
-/// with a unique task type, which affects their behavior.
-/// Currently supported types: `AO` (analogue output), `DO` (digital output)
-#[derive(PartialEq, Clone, Copy)]
-pub enum TaskType {
-    AO,
-    DO,
+
+pub struct ConstFn<T> {
+    val: T
+}
+impl<T> ConstFn<T> {
+    pub fn new(val: T) -> Self {
+        Self { val }
+    }
+}
+impl<T: Clone> Calc<T> for ConstFn<T> {
+    fn calc(&self, _t_arr: &ArrayView1<f64>, mut res_arr: ArrayViewMut1<T>) {
+        res_arr.fill(self.val.clone())
+    }
+}
+impl<T: Clone> Clone for ConstFn<T> {
+    fn clone(&self) -> Self {
+        Self::new(self.val.clone())
+    }
+}
+impl<T: Debug> Debug for ConstFn<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ConstFn(val={:?})", self.val)
+    }
 }
 
 /// The [`BaseChannel`] trait defines the core methods required for a channel's interaction with
@@ -93,35 +111,36 @@ pub enum TaskType {
 ///
 /// This trait ensures that any type representing a channel offers the necessary functionality
 /// to interact with NI devices, ensuring consistency and safety in channel operations.
-pub trait BaseChannel {
+pub trait BaseChan<T>
+where T: Clone + Debug + Send + 'static
+{
     // Immutable field methods
-    fn samp_rate(&self) -> f64;
     fn name(&self) -> &str;
-    fn task_type(&self) -> TaskType;
+    fn samp_rate(&self) -> f64;
     /// The `fresh_compiled` field is set to true by each [`BaseChannel::compile`] call and
     /// `false` by each [`BaseChannel::add_instr`].  
     fn is_fresh_compiled(&self) -> bool;
     /// The `default_value` trait specifies the signal value for not explicitly defined intervals.
-    fn default_value(&self) -> f64;
-    fn reset_value(&self) -> f64;
+    fn dflt_val(&self) -> T;
+    fn reset_val(&self) -> T;
     /// Provides a reference to the edit cache of instrbook list.
-    fn instr_list(&self) -> &BTreeSet<InstrBook>;
+    fn instr_list(&self) -> &BTreeSet<Instr<T>>;
     /// Returns the ending points of compiled instructions.
     fn instr_end(&self) -> &Vec<usize>;
     /// Retrieves the values of compiled instructions.
-    fn instr_val(&self) -> &Vec<Instruction>;
+    fn instr_fn(&self) -> &Vec<Box<dyn FnTraitSet<T>>>;
     // Mutable field methods
     /// Mutable access to the `fresh_compiled` status.
-    fn fresh_compiled_(&mut self) -> &mut bool;
+    fn fresh_compiled_mut(&mut self) -> &mut bool;
     /// Mutable access to the instruction list.
-    fn instr_list_(&mut self) -> &mut BTreeSet<InstrBook>;
+    fn instr_list_mut(&mut self) -> &mut BTreeSet<Instr<T>>;
     /// Mutable access to the ending points of compiled instructions.
-    fn instr_end_(&mut self) -> &mut Vec<usize>;
+    fn instr_end_mut(&mut self) -> &mut Vec<usize>;
     /// Mutable access to the values of compiled instructions.
-    fn instr_val_(&mut self) -> &mut Vec<Instruction>;
+    fn instr_fn_mut(&mut self) -> &mut Vec<Box<dyn FnTraitSet<T>>>;
 
     /// Returns sample clock period calculated as `1.0 / self.samp_rate()`
-    fn clock_period(&self) -> f64 {
+    fn clk_period(&self) -> f64 {
         1.0 / self.samp_rate()
     }
     /// Channel is marked as compiled if its compilation-data field `instr_end` is nonempty
@@ -131,21 +150,6 @@ pub trait BaseChannel {
     /// Channel is marked as edited if its edit-cache field `instr_list` is nonempty
     fn is_edited(&self) -> bool {
         !self.instr_list().is_empty()
-    }
-    /// Channel is marked as editable if it is a AO channel or DO line channel (name contains "line")
-    fn editable(&self) -> bool {
-        match self.task_type() {
-            TaskType::AO => true,
-            TaskType::DO => self.name().contains("line"),
-        }
-    }
-    /// Channel is marked as streamable if it is a AO channel or DO port channel (name does not contain "line")
-    fn streamable(&self) -> bool {
-        match self.task_type() {
-            TaskType::AO => true,
-            // for DODevice, only port channels are streamable
-            TaskType::DO => !self.name().contains("line"),
-        }
     }
 
     /// Compiles the instructions in the channel up to the specified `stop_pos`.
@@ -180,6 +184,10 @@ pub trait BaseChannel {
     /// channel.compile(3e7 as usize); // Compile up to 3 seconds (given a sampling rate of 10^7)
     /// ```
     fn compile(&mut self, stop_pos: usize) {
+        // ToDo: use self.instr_fn_mut() directly since no func merging is done
+        //  maybe rename `compile` to `calc_pad`
+        //  then also rename self.instr_end and self.instr_fn
+
         self.clear_compile_cache();
 
         if self.instr_list().is_empty() {
@@ -193,67 +201,78 @@ pub trait BaseChannel {
         }
 
         // (1) Calculate exhaustive instruction coverage from 0 to stop_pos (instructions + padding)
-        let mut instr_val: Vec<Instruction> = Vec::new();
+        let mut instr_fn: Vec<Box<dyn FnTraitSet<T>>> = Vec::new();
         let mut instr_end: Vec<usize> = Vec::new();
 
         // Padding before the first instruction
-        let first_start_pos = self.instr_list().first().unwrap().start_pos;
+        let first_start_pos = self.instr_list().first().unwrap().start_pos();
         if first_start_pos > 0 {
-            instr_val.push(Instruction::new_const(self.default_value()));
+            instr_fn.push(Box::new(ConstFn::new(self.dflt_val())));
             instr_end.push(first_start_pos);
         }
         // All instructions and paddings after them
         let mut instr_list = self.instr_list().iter().peekable();
-        while let Some(instr_book) = instr_list.next() {
+        while let Some(instr) = instr_list.next() {
             let next_edge = match instr_list.peek() {
-                Some(next_instr_book) => next_instr_book.start_pos,
+                Some(next_instr) => next_instr.start_pos(),
                 None => stop_pos
             };
             // Action depends on instruction end_pos type:
             //  - Some: insert the original instruction as-is + add a separate instruction for padding until the next_edge if there is a gap
             //  - None ("run until next"): insert instruction taking the next_edge as end_pos
-            match instr_book.end_spec {
+            match instr.end_spec() {
                 Some((end_pos, keep_val)) => {
                     // The original instruction:
-                    instr_val.push(instr_book.instr.clone());
+                    instr_fn.push(instr.func().clone());
                     instr_end.push(end_pos);
                     // Padding:
                     if end_pos < next_edge {
                         // padding value
                         let pad_val = if keep_val {
-                            instr_book.instr.eval_point(end_pos as f64 * self.clock_period())
+                            // Evaluate the function at t corresponding to end_pos
+                            let end_t = end_pos as f64 * self.clk_period();
+                            let t_arr = Array1::from_vec(vec![end_t]);
+                            let mut res_arr = Array1::from_vec(vec![self.dflt_val()]);
+                            instr.func().calc(
+                                &t_arr.view(),
+                                res_arr.view_mut()
+                            );
+                            res_arr.to_vec().pop().unwrap()
                         } else {
-                            self.default_value()
+                            self.dflt_val()
                         };
                         // padding instruction
-                        instr_val.push(Instruction::new_const(pad_val));
+                        instr_fn.push(Box::new(ConstFn::new(pad_val)));
                         instr_end.push(next_edge);
                     }
                 },
                 None => {
-                    instr_val.push(instr_book.instr.clone());
+                    instr_fn.push(instr.func().clone());
                     instr_end.push(next_edge);
                 },
             }
         };
 
-        // (2) Transfer prepared instr_val and instr_end into compile cache vectors
+        // ToDo: redundant
+        // (2) Transfer prepared instr_fn and instr_end into compile cache vectors
         //     (merge adjacent instructions, if possible)
-        assert_eq!(instr_val.len(), instr_end.len());
+        assert_eq!(instr_fn.len(), instr_end.len());
         // No need to clear compile cache - it has already been cleaned in the very beginning
         for i in 0..instr_end.len() {
-            if self.instr_val().is_empty() || instr_val[i] != *self.instr_val().last().unwrap() {
-                self.instr_val_().push(instr_val[i].clone());
-                self.instr_end_().push(instr_end[i]);
-            } else {
-                *self.instr_end_().last_mut().unwrap() = instr_end[i];
-            }
+            self.instr_fn_mut().push(instr_fn[i].clone());
+            self.instr_end_mut().push(instr_end[i]);
+            // if self.instr_fn().is_empty() || instr_fn[i] != *self.instr_fn().last().unwrap() {
+            //     self.instr_fn_().push(instr_fn[i].clone());
+            //     self.instr_end_().push(instr_end[i]);
+            // } else {
+            //     *self.instr_end_().last_mut().unwrap() = instr_end[i];
+            // }
         }
         // Verify transfer correctness
-        assert_eq!(self.instr_val().len(), self.instr_end().len());
+        assert_eq!(self.instr_fn().len(), self.instr_end().len());
         assert_eq!(self.total_samps(), stop_pos);
 
-        *self.fresh_compiled_() = true;
+        *self.fresh_compiled_mut() = true;
     }
 
     /// Clears the `instr_list` field of the channel.
@@ -261,16 +280,16 @@ pub trait BaseChannel {
     /// If the compiled cache is empty, it also sets the `fresh_compiled` field to `true`.
     fn clear_edit_cache(&mut self) {
         self.clear_compile_cache();
-        self.instr_list_().clear();
+        self.instr_list_mut().clear();
     }
     /// Clears the compiled cache of the channel.
     ///
     /// Specifically, the method clears the `instr_end` and `instr_val` fields.
     /// If the edit cache is empty, it also sets the `fresh_compiled` field to `true`.
     fn clear_compile_cache(&mut self) {
-        *self.fresh_compiled_() = self.instr_list().is_empty();
-        self.instr_end_().clear();
-        self.instr_val_().clear();
+        *self.fresh_compiled_mut() = self.instr_list().is_empty();
+        self.instr_end_mut().clear();
+        self.instr_fn_mut().clear();
     }
 
     /// Returns the stop position of the compiled instructions.
@@ -285,7 +304,7 @@ pub trait BaseChannel {
     }
     /// Same as [`total_samps`] but the result is multiplied by sample clock period.
     fn total_run_time(&self) -> f64 {
-        self.total_samps() as f64 * self.clock_period()
+        self.total_samps() as f64 * self.clk_period()
     }
 
     /// Returns the effective `end_pos` of the last instruction.
@@ -298,7 +317,7 @@ pub trait BaseChannel {
     }
     /// Same as [`last_instr_end_pos`] but the result is multiplied by sample clock period.
     fn last_instr_end_time(&self) -> f64 {
-        self.last_instr_end_pos() as f64 * self.clock_period()
+        self.last_instr_end_pos() as f64 * self.clk_period()
     }
 
     /// Adds an instruction to the channel.
@@ -357,9 +376,9 @@ pub trait BaseChannel {
     /// "Channel port0/line0
     ///  Instruction InstrBook([CONST, {value: 1}], 5000000-15000000, false) overlaps with the next instruction InstrBook([CONST, {value: 1}], 5000000-5010000, true)"
     /// ```
-    fn add_instr(&mut self, func: Instruction, t: f64, dur_spec: Option<(f64, bool)>) {
+    fn add_instr(&mut self, func: Box<dyn FnTraitSet<T>>, t: f64, dur_spec: Option<(f64, bool)>) {
         // Sanity check - non-negative start time (compare with negative clock half-period to avoid virtual panics for nominal t=0.0)
-        assert!(t > -0.5*self.clock_period(), "Attempted to insert an instruction at negative start time {t}");
+        assert!(t > -0.5*self.clk_period(), "Attempted to insert an instruction at negative start time {t}");
 
         // Convert floating-point start and end times to sample clock ticks
         let start_pos = (t * self.samp_rate()).round() as usize;
@@ -385,29 +404,29 @@ pub trait BaseChannel {
             },
             None => None,
         };
-        let mut new_instr_book = InstrBook::new(start_pos, end_spec, func);
+        let mut new_instr = Instr::new(start_pos, end_spec, func);
 
         // Check for any collisions with already existing instructions
         // - collision on the left
-        if let Some(prev) = self.instr_list().range(..&new_instr_book).next_back() {
+        if let Some(prev) = self.instr_list().range(..&new_instr).next_back() {
             // Determine the effective end point of the previous instruction
             let prev_end = prev.eff_end_pos();
 
-            if prev_end <= new_instr_book.start_pos {
+            if prev_end <= new_instr.start_pos() {
                 // All good - no collision here!
-            } else if prev_end == new_instr_book.start_pos + 1 {
+            } else if prev_end == new_instr.start_pos() + 1 {
                 // Collision of precisely 1 tick
                 //  This might be due to a rounding error for back-to-back pulses. Try to auto-fix it, if possible.
                 //  Action depends on the new instruction duration type:
                 //      - spec dur => trim the new instruction from the left by one tick (provided it is long enough to have at least 1 tick left after trimming)
                 //      - no spec dur => just shift start_pos by 1 tick (if this leads to a collision with an existing neighbor to the right, next check will catch it)
-                match new_instr_book.dur() {
+                match new_instr.dur() {
                     Some(dur) => {
                         assert!(dur - 1 >= 1, "1-tick collision on the left cannot be resolved by trimming since the new instruction is only 1 tick long");
-                        new_instr_book.start_pos += 1;
+                        *(new_instr.start_pos_mut()) += 1;
                     },
                     None => {
-                        new_instr_book.start_pos += 1;
+                        *(new_instr.start_pos_mut()) += 1;
                     },
                 };
             } else {
@@ -416,45 +435,45 @@ pub trait BaseChannel {
                     Collision on the left with the following existing instruction:\n\
                     \t{prev}\n\
                     The new instruction is:\n\
-                    \t{new_instr_book}")
+                    \t{new_instr}")
             }
         }
         // - collision on the right
-        if let Some(next) = self.instr_list().range(&new_instr_book..).next() {
+        if let Some(next) = self.instr_list().range(&new_instr..).next() {
             // Determine the effective end position of the new instruction
-            let end_pos = new_instr_book.eff_end_pos();
+            let end_pos = new_instr.eff_end_pos();
 
-            if end_pos <= next.start_pos {
+            if end_pos <= next.start_pos() {
                 // All good - no collision here!
-            } else if end_pos == next.start_pos + 1 {
+            } else if end_pos == next.start_pos() + 1 {
                 // Collision of precisely 1 tick
                 //  This might be due to a rounding error for back-to-back pulses. Try to auto-fix it, if possible.
                 //  Action depends on the new instruction duration type:
                 //      - spec dur => trim the new instruction from the right by one tick (provided it is long enough to have at least 1 tick left after trimming)
                 //      - no spec dur => panic since "go_something" is not meant to be inserted right in front of some other instruction
-                match new_instr_book.dur() {
+                match new_instr.dur() {
                     Some(dur) => {
                         assert!(dur - 1 >= 1, "1-tick collision on the right cannot be resolved by trimming since the new instruction is only 1 tick long");
-                        new_instr_book.end_spec.as_mut().unwrap().0 -= 1;
+                        new_instr.end_spec_mut().as_mut().unwrap().0 -= 1;
                     },
-                    None => panic!("Attempt to insert go_something-type instruction {new_instr_book} right at the start of another instruction {next}"),
+                    None => panic!("Attempt to insert go_something-type instruction {new_instr} right at the start of another instruction {next}"),
                 }
             } else {
                 // Serious collision of 2 or more ticks due to a user mistake
                 panic!("\n\
                     The new instruction:\n\
-                    \t{new_instr_book}\n\
+                    \t{new_instr}\n\
                     collides on the right with the following existing instruction:\n\
                     \t{next}")
             };
         };
 
-        self.instr_list_().insert(new_instr_book);
-        *self.fresh_compiled_() = false;
+        self.instr_list_mut().insert(new_instr);
+        *self.fresh_compiled_mut() = false;
     }
     /// Utility function to add a constant instruction to the channel
-    fn constant(&mut self, value: f64, t: f64, dur_spec: Option<(f64, bool)>) {
-        self.add_instr(Instruction::new_const(value), t, dur_spec);
+    fn constant(&mut self, val: T, t: f64, dur_spec: Option<(f64, bool)>) {
+        self.add_instr(Box::new(ConstFn::new(val)), t, dur_spec);
     }
     fn add_reset_instr(&mut self, reset_pos: usize) {
         if reset_pos < self.last_instr_end_pos() {
@@ -464,12 +483,12 @@ pub trait BaseChannel {
                 self.last_instr_end_pos()
             )
         }
-        let reset_instr = InstrBook::new(
+        let reset_instr = Instr::new(
             reset_pos,
             None,
-            Instruction::new_const(self.reset_value())
+            Box::new(ConstFn::new(self.reset_val()))
         );
-        self.instr_list_().insert(reset_instr);
+        self.instr_list_mut().insert(reset_instr);
     }
 
     /// Utility function for signal sampling.
@@ -519,6 +538,34 @@ pub trait BaseChannel {
         }
         low as usize
     }
+
+    /// Argument `t_arr` is redundant
+    /// (it can already be calculated knowing `start_pos`, `res_arr.len()`, and `self.samp_rate()`)
+    /// but we require it for efficiency reason - the calling `BaseDev` calculates the `t_arr` once
+    /// and then reuses it for every channel by lending a read-only view.
+    fn fill_samps(&self, start_pos: usize, mut res_arr: ArrayViewMut1<T>, t_arr: ArrayView1<f64>) {
+        // ToDo: rewrite this function as a call to `fill_signal_nsamps()`
+
+        assert!(self.is_compiled(), "Attempting to calculate signal on not-compiled channel {}", self.name());
+        assert_eq!(res_arr.len(), t_arr.len());
+
+        let end_pos = start_pos + res_arr.len();
+        assert!(end_pos <= self.total_samps());
+
+        let first_instr_idx = self.binfind_first_intersect_instr(start_pos);
+        let last_instr_idx = self.binfind_first_intersect_instr(end_pos);
+
+        let mut cur_pos = start_pos;
+        for instr_idx in first_instr_idx..=last_instr_idx {
+            let next_pos = std::cmp::min(end_pos, self.instr_end()[instr_idx]);
+            self.instr_fn()[instr_idx].calc(
+                &t_arr.slice(s![cur_pos..next_pos]),
+                res_arr.slice_mut(s![cur_pos..next_pos])
+            );
+            cur_pos = next_pos;
+        }
+    }
+
     /// Fills a buffer (1D view of array) with the signal samples derived from a channel's instructions.
     ///
     /// This method samples the float-point signal from channel's compile cache
@@ -571,7 +618,8 @@ pub trait BaseChannel {
         start_pos: usize,
         end_pos: usize,
         num_samps: usize,
-        buffer: &mut ndarray::ArrayViewMut1<f64>,
+        t_arr: ArrayView1<f64>,
+        mut res_arr: ArrayViewMut1<T>,
     ) {
         assert!(
             self.is_compiled(),
@@ -604,143 +652,139 @@ pub trait BaseChannel {
 
         let mut cur_pos: usize = start_pos as usize;
         for i in start_instr_idx..=end_instr_idx {
-            let instr_signal_length = std::cmp::min(end_pos, self.instr_end()[i]) - cur_pos;
-            let slice =
-                &mut buffer.slice_mut(s![cvt_idx(cur_pos)..cvt_idx(cur_pos + instr_signal_length)]);
-            self.instr_val()[i].eval_inplace(slice);
-            cur_pos += instr_signal_length;
+            let next_pos = std::cmp::min(end_pos, self.instr_end()[i]);
+            let t_arr_slice = t_arr.slice(s![cvt_idx(cur_pos)..cvt_idx(next_pos)]);
+            let res_arr_slice = res_arr.slice_mut(s![cvt_idx(cur_pos)..cvt_idx(next_pos)]);
+            self.instr_fn()[i].calc(&t_arr_slice, res_arr_slice);
+            cur_pos = next_pos;
         }
     }
     /// Calls `fill_signal_nsamps` with the appropriate buffer and returns signal vector.
     /// The in-place version `fill_signal_nsamps` is preferred to this method for efficiency.
     /// This is mainly a wrapper to expose channel-signal sampling to Python
-    fn calc_signal_nsamps(&self, start_time: f64, end_time: f64, num_samps: usize) -> Vec<f64> {
-        // ToDo: a similar function `BaseDevice::calc_signal_nsamps()` takes `start_pos: usize` and `end_pos: usize`
-        //  consider matching this signature.
-        //  However, there is difference in usage:
-        //  - `BaseChannel::calc_signal_nsamps()` is used in `iplot()` only
-        //  - `BaseDevice::calc_signal_nsamps()` is used for streaming only
-
-        // ToDo: can this function take `usize` values for `start/end_time` instead of `f64`.
-        //  If not, maybe better to use `.round()`?
-        let mut buffer = Array1::linspace(start_time, end_time, num_samps);
-        let start_pos = (start_time * self.samp_rate()) as usize;
-        let end_pos = (end_time * self.samp_rate()) as usize;
-        self.fill_signal_nsamps(start_pos, end_pos, num_samps, &mut buffer.view_mut());
-        buffer.to_vec()
-    }
-}
-
-/// Represents a physical channel on an NI device.
-///
-/// `Channel` provides a concrete implementation of the [`BaseChannel`] trait, offering
-/// straightforward and direct methods to interact with the NI device channels. Each instance of
-/// `Channel` corresponds to a physical channel on an NI device, characterized by its `name`.
-///
-/// The `Channel` struct ensures that any interactions with the NI devices are consistent with the
-/// requirements and behaviors defined by the [`BaseChannel`] trait.
-///
-/// # Fields
-/// - `samp_rate`: The sampling rate of the channel, determining how often the channel updates.
-/// - `task_type`: Specifies the type of task associated with this channel.
-/// - `fresh_compiled`: A boolean indicating whether the channel's compiled results are up-to-date with the edit cache.
-/// - `name`: A string representation of the channel's identifier as recognized by the NI driver.
-/// - `instr_list`: The edit-cache for the channel. Maintains a sorted list of instruction books.
-/// - `instr_end`: Stores the ending points of compiled instructions.
-/// - `instr_val`: Holds the values of the compiled instructions.
-pub struct Channel {
-    samp_rate: f64,
-    fresh_compiled: bool,
-    task_type: TaskType,
-    name: String,
-    default_value: f64,
-    instr_list: BTreeSet<InstrBook>,
-    instr_end: Vec<usize>,
-    instr_val: Vec<Instruction>,
-}
-
-impl BaseChannel for Channel {
-    fn samp_rate(&self) -> f64 {
-        self.samp_rate
-    }
-    fn is_fresh_compiled(&self) -> bool {
-        self.fresh_compiled
-    }
-    fn name(&self) -> &str {
-        &self.name
-    }
-    fn default_value(&self) -> f64 {
-        self.default_value
-    }
-    fn reset_value(&self) -> f64 {
-        0.0  // ToDo when splitting AO/DO types
-    }
-    fn instr_list(&self) -> &BTreeSet<InstrBook> {
-        &self.instr_list
-    }
-    fn instr_end(&self) -> &Vec<usize> {
-        &self.instr_end
-    }
-    fn instr_val(&self) -> &Vec<Instruction> {
-        &self.instr_val
-    }
-    fn instr_list_(&mut self) -> &mut BTreeSet<InstrBook> {
-        &mut self.instr_list
-    }
-    fn instr_end_(&mut self) -> &mut Vec<usize> {
-        &mut self.instr_end
-    }
-    fn instr_val_(&mut self) -> &mut Vec<Instruction> {
-        &mut self.instr_val
-    }
-    fn fresh_compiled_(&mut self) -> &mut bool {
-        &mut self.fresh_compiled
-    }
-    fn task_type(&self) -> TaskType {
-        self.task_type
-    }
-}
-
-impl Channel {
-    /// Constructs a new `Channel` instance.
-    ///
-    /// Creates a new channel with the specified task type, physical name, and sampling rate.
-    ///
-    /// # Arguments
-    /// * `task_type`: Specifies the type of task associated with this channel.
-    ///    It can be either `AO` (analogue output) or `DO` (digital output).
-    /// * `name`: The string representation of the channel's identifier as recognized by the NI driver.
-    /// * `samp_rate`: The sampling rate for the channel, determining how often the channel updates.
-    ///
-    /// # Returns
-    ///
-    /// Returns a new instance of `Channel` initialized with the provided arguments.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// # use nicompiler_backend::channel::*;
-    /// let do_channel = Channel::new(TaskType::DO, "port0/line0", 1e7, 0.);
-    /// let ao_channel = Channel::new(TaskType::AO, "ao0", 1e6, 0.);
-    /// ```
-    ///
-    pub fn new(task_type: TaskType, name: &str, samp_rate: f64, default_value: f64) -> Self {
-        Self {
-            samp_rate,
-            task_type,
-            fresh_compiled: true,
-            name: name.to_string(),
-            default_value: default_value,
-            instr_list: BTreeSet::new(),
-            instr_end: Vec::new(),
-            instr_val: Vec::new(),
-        }
+    fn calc_signal_nsamps(&self, start_time: f64, end_time: f64, num_samps: usize) -> Vec<T> {
+        // ToDo: this function is only used for plotting. Rewrite as a concise "eval_signal(...)" function
+        let t_arr = Array1::linspace(start_time, end_time, num_samps);
+        let mut res_arr = Array1::from_elem(num_samps, self.dflt_val());
+        let start_pos = (start_time * self.samp_rate()).round() as usize;
+        let end_pos = (end_time * self.samp_rate()).round() as usize;
+        self.fill_signal_nsamps(start_pos, end_pos, num_samps, t_arr.view(), res_arr.view_mut());
+        res_arr.to_vec()
     }
 }
 
 // ==================== Unit tests ====================
 #[cfg(test)]
 mod test {
+    /*
+    /// Represents a physical channel on an NI device.
+    ///
+    /// `Channel` provides a concrete implementation of the [`BaseChannel`] trait, offering
+    /// straightforward and direct methods to interact with the NI device channels. Each instance of
+    /// `Channel` corresponds to a physical channel on an NI device, characterized by its `name`.
+    ///
+    /// The `Channel` struct ensures that any interactions with the NI devices are consistent with the
+    /// requirements and behaviors defined by the [`BaseChannel`] trait.
+    ///
+    /// # Fields
+    /// - `samp_rate`: The sampling rate of the channel, determining how often the channel updates.
+    /// - `task_type`: Specifies the type of task associated with this channel.
+    /// - `fresh_compiled`: A boolean indicating whether the channel's compiled results are up-to-date with the edit cache.
+    /// - `name`: A string representation of the channel's identifier as recognized by the NI driver.
+    /// - `instr_list`: The edit-cache for the channel. Maintains a sorted list of instruction books.
+    /// - `instr_end`: Stores the ending points of compiled instructions.
+    /// - `instr_val`: Holds the values of the compiled instructions.
+    pub struct Channel {
+        samp_rate: f64,
+        fresh_compiled: bool,
+        task_type: TaskType,
+        name: String,
+        default_value: f64,
+        instr_list: BTreeSet<InstrBook>,
+        instr_end: Vec<usize>,
+        instr_val: Vec<Instr>,
+    }
+
+    impl BaseChan for Channel {
+        fn samp_rate(&self) -> f64 {
+            self.samp_rate
+        }
+        fn is_fresh_compiled(&self) -> bool {
+            self.fresh_compiled
+        }
+        fn name(&self) -> &str {
+            &self.name
+        }
+        fn dflt_val(&self) -> f64 {
+            self.default_value
+        }
+        fn reset_val(&self) -> f64 {
+            0.0
+        }
+        fn instr_list(&self) -> &BTreeSet<InstrBook> {
+            &self.instr_list
+        }
+        fn instr_end(&self) -> &Vec<usize> {
+            &self.instr_end
+        }
+        fn instr_fn(&self) -> &Vec<Instr> {
+            &self.instr_val
+        }
+        fn instr_list_mut(&mut self) -> &mut BTreeSet<InstrBook> {
+            &mut self.instr_list
+        }
+        fn instr_end_mut(&mut self) -> &mut Vec<usize> {
+            &mut self.instr_end
+        }
+        fn instr_fn_mut(&mut self) -> &mut Vec<Instr> {
+            &mut self.instr_val
+        }
+        fn fresh_compiled_mut(&mut self) -> &mut bool {
+            &mut self.fresh_compiled
+        }
+        fn task_type(&self) -> TaskType {
+            self.task_type
+        }
+    }
+
+    impl Channel {
+        /// Constructs a new `Channel` instance.
+        ///
+        /// Creates a new channel with the specified task type, physical name, and sampling rate.
+        ///
+        /// # Arguments
+        /// * `task_type`: Specifies the type of task associated with this channel.
+        ///    It can be either `AO` (analogue output) or `DO` (digital output).
+        /// * `name`: The string representation of the channel's identifier as recognized by the NI driver.
+        /// * `samp_rate`: The sampling rate for the channel, determining how often the channel updates.
+        ///
+        /// # Returns
+        ///
+        /// Returns a new instance of `Channel` initialized with the provided arguments.
+        ///
+        /// # Example
+        ///
+        /// ```
+        /// # use nicompiler_backend::channel::*;
+        /// let do_channel = Channel::new(TaskType::DO, "port0/line0", 1e7, 0.);
+        /// let ao_channel = Channel::new(TaskType::AO, "ao0", 1e6, 0.);
+        /// ```
+        ///
+        pub fn new(task_type: TaskType, name: &str, samp_rate: f64, default_value: f64) -> Self {
+            Self {
+                samp_rate,
+                task_type,
+                fresh_compiled: true,
+                name: name.to_string(),
+                default_value: default_value,
+                instr_list: BTreeSet::new(),
+                instr_end: Vec::new(),
+                instr_val: Vec::new(),
+            }
+        }
+    }
+     */
+
     mod add_instr {
         use crate::instruction::*;
         use crate::channel::*;
@@ -807,9 +851,9 @@ mod test {
             );
             my_chan.compile(my_chan.last_instr_end_pos());
             assert_eq!(my_chan.instr_end()[0], 1000000);
-            assert!(my_chan.instr_val()[0].instr_type == InstrType::CONST);
+            assert!(my_chan.instr_fn()[0].instr_type == InstrType::CONST);
             assert!({
-                let &pad_val = my_chan.instr_val()[0].args.get("value").unwrap();
+                let &pad_val = my_chan.instr_fn()[0].args.get("value").unwrap();
                 // Check for float equality with caution
                 (pad_val - chan_dflt).abs() < 1e-10
             });
@@ -845,7 +889,7 @@ mod test {
                 0.0, Some((pulse_dur, true))
             );
             my_chan.compile(comp_stop_pos);
-            let pad_func = my_chan.instr_val()[1].clone();
+            let pad_func = my_chan.instr_fn()[1].clone();
             assert!(pad_func.instr_type == InstrType::CONST);
             assert!({
                 let &actual_pad_val = pad_func.args.get("value").unwrap();
@@ -860,7 +904,7 @@ mod test {
                 0.0, Some((pulse_dur, false))
             );
             my_chan.compile(comp_stop_pos);
-            let pad_func = my_chan.instr_val()[1].clone();
+            let pad_func = my_chan.instr_fn()[1].clone();
             assert!(pad_func.instr_type == InstrType::CONST);
             assert!({
                 let &actual_pad_val = pad_func.args.get("value").unwrap();

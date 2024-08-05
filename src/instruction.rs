@@ -22,7 +22,7 @@
 
 use std::cmp::Ordering;
 use std::fmt;
-use std::fmt::{Display, Debug};
+use std::fmt::Display;
 use crate::fn_lib_tools::FnTraitSet;
 
 /// Struct containing function and start/end edge data of the instruction.
@@ -104,10 +104,31 @@ impl<T> Instr<T> {
             func,
         }
     }
-    /// Returns the value of the `end_pos` field
+    /// Returns the value of the `start_pos` field
+    pub fn start_pos(&self) -> usize {
+        self.start_pos
+    }
+    pub fn start_pos_mut(&mut self) -> &mut usize {
+        &mut self.start_pos
+    }
+    /// Returns the value of the `end_spec` field
+    pub fn end_spec(&self) -> Option<(usize, bool)> {
+        self.end_spec.clone()
+    }
+    pub fn end_spec_mut(&mut self) -> &mut Option<(usize, bool)> {
+        &mut self.end_spec
+    }
+    /// Returns the value of the `end_pos` sub-field
     pub fn end_pos(&self) -> Option<usize> {
         match self.end_spec {
             Some((end_pos, _keep_val)) => Some(end_pos),
+            None => None,
+        }
+    }
+    /// Returns the value of the `keep_val` sub-field
+    pub fn keep_val(&self) -> Option<bool> {
+        match self.end_spec {
+            Some((_end_pos, keep_val)) => Some(keep_val),
             None => None,
         }
     }
@@ -133,6 +154,10 @@ impl<T> Instr<T> {
             Some((end_pos, _keep_val)) => Some(end_pos - self.start_pos),
             None => None,
         }
+    }
+
+    pub fn func(&self) -> &Box<dyn FnTraitSet<T>> {
+        &self.func
     }
 }
 
