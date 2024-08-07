@@ -115,7 +115,7 @@ pub trait BaseChan<T>
 where T: Clone + Debug + Send + 'static
 {
     // Immutable field methods
-    fn name(&self) -> &str;
+    fn name(&self) -> String;
     fn samp_rate(&self) -> f64;
     /// The `fresh_compiled` field is set to true by each [`BaseChannel::compile`] call and
     /// `false` by each [`BaseChannel::add_instr`].  
