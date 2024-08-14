@@ -186,7 +186,7 @@ pub mod fn_lib_tools;
 pub mod instruction;
 pub mod channel;
 pub mod device;
-// pub mod streamer;
+pub mod streamer;
 // pub mod utils;
 
 // ToDo: restrict public API access to the following functions:
