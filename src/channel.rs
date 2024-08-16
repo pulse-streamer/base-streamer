@@ -112,7 +112,7 @@ impl<T: Debug> Debug for ConstFn<T> {
 /// This trait ensures that any type representing a channel offers the necessary functionality
 /// to interact with NI devices, ensuring consistency and safety in channel operations.
 pub trait BaseChan<T>
-where T: Clone + Debug + Send + 'static
+where T: Clone + Debug + Send + Sync + 'static
 {
     // Immutable field methods
     fn name(&self) -> String;
@@ -122,22 +122,22 @@ where T: Clone + Debug + Send + 'static
     fn is_fresh_compiled(&self) -> bool;
     /// The `default_value` trait specifies the signal value for not explicitly defined intervals.
     fn dflt_val(&self) -> T;
-    fn reset_val(&self) -> T;
+    fn rst_val(&self) -> T;
     /// Provides a reference to the edit cache of instrbook list.
     fn instr_list(&self) -> &BTreeSet<Instr<T>>;
     /// Returns the ending points of compiled instructions.
-    fn instr_end(&self) -> &Vec<usize>;
+    fn compile_cache_ends(&self) -> &Vec<usize>;
     /// Retrieves the values of compiled instructions.
-    fn instr_fn(&self) -> &Vec<Box<dyn FnTraitSet<T>>>;
+    fn compile_cache_fns(&self) -> &Vec<Box<dyn FnTraitSet<T>>>;
     // Mutable field methods
     /// Mutable access to the `fresh_compiled` status.
     fn fresh_compiled_mut(&mut self) -> &mut bool;
     /// Mutable access to the instruction list.
     fn instr_list_mut(&mut self) -> &mut BTreeSet<Instr<T>>;
     /// Mutable access to the ending points of compiled instructions.
-    fn instr_end_mut(&mut self) -> &mut Vec<usize>;
+    fn compile_cache_ends_mut(&mut self) -> &mut Vec<usize>;
     /// Mutable access to the values of compiled instructions.
-    fn instr_fn_mut(&mut self) -> &mut Vec<Box<dyn FnTraitSet<T>>>;
+    fn compile_cache_fns_mut(&mut self) -> &mut Vec<Box<dyn FnTraitSet<T>>>;
 
     /// Returns sample clock period calculated as `1.0 / self.samp_rate()`
     fn clk_period(&self) -> f64 {
@@ -145,7 +145,7 @@ where T: Clone + Debug + Send + 'static
     }
     /// Channel is marked as compiled if its compilation-data field `instr_end` is nonempty
     fn is_compiled(&self) -> bool {
-        !self.instr_end().is_empty()
+        !self.compile_cache_ends().is_empty()
     }
     /// Channel is marked as edited if its edit-cache field `instr_list` is nonempty
     fn is_edited(&self) -> bool {
@@ -259,8 +259,8 @@ where T: Clone + Debug + Send + 'static
         assert_eq!(instr_fn.len(), instr_end.len());
         // No need to clear compile cache - it has already been cleaned in the very beginning
         for i in 0..instr_end.len() {
-            self.instr_fn_mut().push(instr_fn[i].clone());
-            self.instr_end_mut().push(instr_end[i]);
+            self.compile_cache_fns_mut().push(instr_fn[i].clone());
+            self.compile_cache_ends_mut().push(instr_end[i]);
             // if self.instr_fn().is_empty() || instr_fn[i] != *self.instr_fn().last().unwrap() {
             //     self.instr_fn_().push(instr_fn[i].clone());
             //     self.instr_end_().push(instr_end[i]);
@@ -269,7 +269,7 @@ where T: Clone + Debug + Send + 'static
             // }
         }
         // Verify transfer correctness
-        assert_eq!(self.instr_fn().len(), self.instr_end().len());
+        assert_eq!(self.compile_cache_fns().len(), self.compile_cache_ends().len());
         assert_eq!(self.total_samps(), stop_pos);
 
         *self.fresh_compiled_mut() = true;
@@ -288,8 +288,8 @@ where T: Clone + Debug + Send + 'static
     /// If the edit cache is empty, it also sets the `fresh_compiled` field to `true`.
     fn clear_compile_cache(&mut self) {
         *self.fresh_compiled_mut() = self.instr_list().is_empty();
-        self.instr_end_mut().clear();
-        self.instr_fn_mut().clear();
+        self.compile_cache_ends_mut().clear();
+        self.compile_cache_fns_mut().clear();
     }
 
     /// Returns the stop position of the compiled instructions.
@@ -297,7 +297,7 @@ where T: Clone + Debug + Send + 'static
     /// If the channel is not compiled, it returns `0`. Otherwise, it retrieves the last end position
     /// from the compiled cache.
     fn total_samps(&self) -> usize {
-        match self.instr_end().last() {
+        match self.compile_cache_ends().last() {
             Some(&end_pos) => end_pos,
             None => 0
         }
@@ -486,7 +486,7 @@ where T: Clone + Debug + Send + 'static
         let reset_instr = Instr::new(
             reset_pos,
             None,
-            Box::new(ConstFn::new(self.reset_val()))
+            Box::new(ConstFn::new(self.rst_val()))
         );
         self.instr_list_mut().insert(reset_instr);
     }
@@ -525,12 +525,12 @@ where T: Clone + Debug + Send + 'static
     /// ```
     fn binfind_first_intersect_instr(&self, start_pos: usize) -> usize {
         let mut low: i32 = 0;
-        let mut high: i32 = self.instr_end().len() as i32 - 1;
+        let mut high: i32 = self.compile_cache_ends().len() as i32 - 1;
         while low <= high {
             let mid = ((low + high) / 2) as usize;
-            if self.instr_end()[mid] < start_pos {
+            if self.compile_cache_ends()[mid] < start_pos {
                 low = mid as i32 + 1;
-            } else if self.instr_end()[mid] > start_pos {
+            } else if self.compile_cache_ends()[mid] > start_pos {
                 high = mid as i32 - 1;
             } else {
                 return mid as usize;
@@ -557,8 +557,8 @@ where T: Clone + Debug + Send + 'static
 
         let mut cur_pos = start_pos;
         for instr_idx in first_instr_idx..=last_instr_idx {
-            let next_pos = std::cmp::min(end_pos, self.instr_end()[instr_idx]);
-            self.instr_fn()[instr_idx].calc(
+            let next_pos = std::cmp::min(end_pos, self.compile_cache_ends()[instr_idx]);
+            self.compile_cache_fns()[instr_idx].calc(
                 &t_arr.slice(s![cur_pos..next_pos]),
                 res_arr.slice_mut(s![cur_pos..next_pos])
             );
@@ -652,10 +652,10 @@ where T: Clone + Debug + Send + 'static
 
         let mut cur_pos: usize = start_pos as usize;
         for i in start_instr_idx..=end_instr_idx {
-            let next_pos = std::cmp::min(end_pos, self.instr_end()[i]);
+            let next_pos = std::cmp::min(end_pos, self.compile_cache_ends()[i]);
             let t_arr_slice = t_arr.slice(s![cvt_idx(cur_pos)..cvt_idx(next_pos)]);
             let res_arr_slice = res_arr.slice_mut(s![cvt_idx(cur_pos)..cvt_idx(next_pos)]);
-            self.instr_fn()[i].calc(&t_arr_slice, res_arr_slice);
+            self.compile_cache_fns()[i].calc(&t_arr_slice, res_arr_slice);
             cur_pos = next_pos;
         }
     }

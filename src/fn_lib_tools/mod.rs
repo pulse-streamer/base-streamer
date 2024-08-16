@@ -11,12 +11,12 @@ pub trait Calc<T> {
     fn calc(&self, t_arr: &ArrayView1<f64>, res_arr: ArrayViewMut1<T>);
 }
 
-pub trait FnTraitSet<T>: Calc<T> + Debug + Send {
+pub trait FnTraitSet<T>: Calc<T> + Debug + Send + Sync {
     fn clone_to_box(&self) -> Box<dyn FnTraitSet<T>>;
 }
 
 impl<S, T> FnTraitSet<T> for S
-    where S: Calc<T> + Clone + Debug + Send + 'static
+    where S: Calc<T> + Clone + Debug + Send + Sync + 'static
 {
     fn clone_to_box(&self) -> Box<dyn FnTraitSet<T>> {
         Box::new(self.clone())

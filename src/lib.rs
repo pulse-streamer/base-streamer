@@ -187,14 +187,3 @@ pub mod instruction;
 pub mod channel;
 pub mod device;
 pub mod streamer;
-// pub mod utils;
-
-// ToDo: restrict public API access to the following functions:
-//  - mutable field accessors
-// pub use instruction::*;
-// pub use channel::*;
-// pub use device::*;
-// pub use streamer::*;
-// pub use utils::*;
-
-

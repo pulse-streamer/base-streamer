@@ -21,10 +21,10 @@ macro_rules! eval_on_both {
 
 pub trait BaseStreamer<A, AChan, ADev, D, DChan, DDev>
 where
-    A: Clone + Debug + Send + 'static,
+    A: Clone + Debug + Send + Sync + 'static,
     AChan: BaseChan<A>,
     ADev: BaseDev<A, AChan>,
-    D: Clone + Debug + Send + 'static,
+    D: Clone + Debug + Send + Sync + 'static,
     DChan: BaseChan<D>,
     DDev: BaseDev<D, DChan>
 {

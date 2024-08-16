@@ -79,7 +79,7 @@ use crate::channel::BaseChan;
 /// When creating a new type that represents an NI device, implementing this trait ensures that the type has all the necessary methods and behaviors typical of NI devices. Implementers can then extend or override these methods as necessary to provide device-specific behavior or optimizations.
 pub trait BaseDev<T, C>
 where
-    T: Clone + Debug + Send + 'static,  // output sample data type
+    T: Clone + Debug + Send + Sync + 'static,  // output sample data type
     C: BaseChan<T>                      // channel type
 {
     // Field methods
@@ -272,7 +272,7 @@ where
         let samps_per_chan: IndexMap<String, usize> =
             self.chans()
                 .iter()
-                .filter(|(_chan_name, chan)| !chan.instr_end().is_empty())
+                .filter(|(_chan_name, chan)| !chan.compile_cache_ends().is_empty())
                 .map(|(chan_name, chan)| (chan_name.to_string(), chan.total_samps()))
                 .collect();
 
