@@ -4,19 +4,9 @@ use indexmap::IndexMap;
 use crate::channel::BaseChan;
 use crate::device::BaseDev;
 
-macro_rules! call_on_both {
-    ($subj1: expr, $subj2: expr, $($method_chain:tt)*) => {{
-        {$subj1.$($method_chain)*};
-        {$subj2.$($method_chain)*};
-    }}
-}
-
-macro_rules! eval_on_both {
-    ($subj1: expr, $subj2: expr, $($method_chain:tt)*) => {{
-        let res1 = {$subj1.$($method_chain)*};
-        let res2 = {$subj2.$($method_chain)*};
-        (res1, res2)
-    }}
+pub enum TypedDev<ADev, DDev> {
+    AO(ADev),
+    DO(DDev),
 }
 
 pub trait BaseStreamer<A, AChan, ADev, D, DChan, DDev>
@@ -28,69 +18,70 @@ where
     DChan: BaseChan<D>,
     DDev: BaseDev<D, DChan>
 {
-    fn ao_devs(&self) -> &IndexMap<String, ADev>;
-    fn ao_devs_mut(&mut self) -> &mut IndexMap<String, ADev>;
-
-    fn do_devs(&self) -> &IndexMap<String, DDev>;
-    fn do_devs_mut(&mut self) -> &mut IndexMap<String, DDev>;
+    fn devs(&self) -> &IndexMap<String, TypedDev<ADev, DDev>>;
+    fn devs_mut(&mut self) -> &mut IndexMap<String, TypedDev<ADev, DDev>>;
 
     fn add_ao_dev(&mut self, dev: ADev) {
-        if self.ao_devs().contains_key(&dev.name()) {
-            panic!("There is already an AO device with name {} registered", dev.name())
+        if self.devs().contains_key(&dev.name()) {
+            panic!("There is already a device with name {} registered", dev.name())
         }
-        self.ao_devs_mut().insert(dev.name(), dev);
+        self.devs_mut().insert(dev.name(),TypedDev::AO(dev));
     }
 
     fn add_do_dev(&mut self, dev: DDev) {
-        if self.do_devs().contains_key(&dev.name()) {
-            panic!("There is already a DO device with name {} registered", dev.name())
+        if self.devs().contains_key(&dev.name()) {
+            panic!("There is already a device with name {} registered", dev.name())
         }
-        self.do_devs_mut().insert(dev.name(), dev);
+        self.devs_mut().insert(dev.name(),TypedDev::DO(dev));
     }
 
     fn last_instr_end_time(&self) -> f64 {
-        let (a_res, d_res) = eval_on_both!(
-            self.ao_devs(),
-            self.do_devs(),
-            values().map(|dev| dev.last_instr_end_time()).fold(0.0, f64::max)
-        );
-        f64::max(a_res, d_res)
+        self.devs().values().map(|typed_dev| {
+            match typed_dev {
+                TypedDev::AO(dev) => dev.last_instr_end_time(),
+                TypedDev::DO(dev) => dev.last_instr_end_time(),
+            }
+        }).fold(0.0, f64::max)
     }
 
     fn total_run_time(&self) -> f64 {
-        let (a_res, d_res) = eval_on_both!(
-            self.ao_devs(),
-            self.do_devs(),
-            values().map(|dev| dev.total_run_time()).fold(0.0, f64::max)
-        );
-        f64::max(a_res, d_res)
+        self.devs().values().map(|typed_dev| match typed_dev {
+            TypedDev::AO(dev) => dev.total_run_time(),
+            TypedDev::DO(dev) => dev.total_run_time(),
+        }).fold(0.0, f64::max)
     }
 
     fn is_edited(&self) -> bool {
-        let (a_res, d_res) = eval_on_both!(
-            self.ao_devs(),
-            self.do_devs(),
-            values().any(|dev| dev.is_edited())
-        );
-        a_res || d_res
+        self.devs()
+            .values()
+            .any(
+                |typed_dev| match typed_dev {
+                    TypedDev::AO(dev) => dev.is_edited(),
+                    TypedDev::DO(dev) => dev.is_edited(),
+                }
+            )
     }
 
     fn is_compiled(&self) -> bool {
-        let (a_res, d_res) = eval_on_both!(
-            self.ao_devs(),
-            self.do_devs(),
-            values().any(|dev| dev.is_compiled())
-        );
-        a_res || d_res
+        self.devs()
+            .values()
+            .any(
+                |typed_dev| match typed_dev {
+                    TypedDev::AO(dev) => dev.is_compiled(),
+                    TypedDev::DO(dev) => dev.is_compiled(),
+                }
+            )
     }
 
     fn is_fresh_compiled(&self) -> bool {
-        let (a_res, d_res) = eval_on_both!(
-            self.ao_devs(),
-            self.do_devs(),
-            values().all(|dev| dev.is_fresh_compiled())
-        );
-        a_res && d_res
+        self.devs()
+            .values()
+            .all(
+                |typed_dev| match typed_dev {
+                    TypedDev::AO(dev) => dev.is_fresh_compiled(),
+                    TypedDev::DO(dev) => dev.is_fresh_compiled(),
+                }
+            )
     }
 
     fn compile(&mut self, stop_time: Option<f64>) -> f64 {
@@ -107,42 +98,39 @@ where
             },
             None => self.last_instr_end_time(),
         };
-        call_on_both!(
-            self.ao_devs_mut(),
-            self.do_devs_mut(),
-            values_mut().for_each(|dev| {dev.compile(stop_time);})
-        );
+
+        self.devs_mut().values_mut().for_each(|typed_dev| {
+            match typed_dev {
+                TypedDev::AO(dev) => dev.compile(stop_time),
+                TypedDev::DO(dev) => dev.compile(stop_time),
+            };
+        });
+
         self.total_run_time()
     }
 
     fn clear_compile_cache(&mut self) {
-        call_on_both!(
-            self.ao_devs_mut(),
-            self.do_devs_mut(),
-            values_mut().for_each(|dev| dev.clear_compile_cache())
-        )
+        self.devs_mut().values_mut().for_each(|typed_dev| match typed_dev {
+            TypedDev::AO(dev) => dev.clear_compile_cache(),
+            TypedDev::DO(dev) => dev.clear_compile_cache(),
+        });
     }
 
     fn clear_edit_cache(&mut self) {
         self.clear_compile_cache();
-        call_on_both!(
-            self.ao_devs_mut(),
-            self.do_devs_mut(),
-            values_mut().for_each(|dev| dev.clear_edit_cache())
-        );
+        self.devs_mut().values_mut().for_each(|typed_dev| match typed_dev {
+            TypedDev::AO(dev) => dev.clear_edit_cache(),
+            TypedDev::DO(dev) => dev.clear_edit_cache(),
+        });
     }
 
-    fn compiled_ao_devs(&self) -> Vec<&ADev> {
-        self.ao_devs()
+    fn compiled_devs(&self) -> Vec<&TypedDev<ADev, DDev>> {
+        self.devs()
             .values()
-            .filter(|dev| dev.is_compiled())
-            .collect()
-    }
-
-    fn compiled_do_devs(&self) -> Vec<&DDev> {
-        self.do_devs()
-            .values()
-            .filter(|dev| dev.is_compiled())
+            .filter(|typed_dev| match typed_dev {
+                TypedDev::AO(dev) => dev.is_compiled(),
+                TypedDev::DO(dev) => dev.is_compiled(),
+            })
             .collect()
     }
 
@@ -161,10 +149,9 @@ where
             },
             None => last_instr_end_time
         };
-        call_on_both!(
-            self.ao_devs_mut(),
-            self.do_devs_mut(),
-            values_mut().for_each(|dev| dev.add_reset_instr(reset_time))
-        );
+        self.devs_mut().values_mut().for_each(|typed_dev| match typed_dev {
+            TypedDev::AO(dev) => dev.add_reset_instr(reset_time),
+            TypedDev::DO(dev) => dev.add_reset_instr(reset_time),
+        })
     }
 }
