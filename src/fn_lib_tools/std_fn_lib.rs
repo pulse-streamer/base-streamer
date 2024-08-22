@@ -1,8 +1,8 @@
 use ndarray::{ArrayView1, ArrayViewMut1};
 use pyo3::prelude::*;
 use std::f64::consts::PI;
-use fn_lib_macros::std_fn;
-use crate::fn_lib_tools::{Calc, FnBoxF64};
+use fn_lib_macros::{std_fn_f64, std_fn_bool};
+use crate::fn_lib_tools::{Calc, FnBoxF64, FnBoxBool};
 
 #[pyclass]
 pub struct StdFnLib {}
@@ -18,7 +18,7 @@ impl StdFnLib {
 /// Linear function:
 ///     a: slope
 ///     b: offset
-#[std_fn]
+#[std_fn_f64]
 pub struct LinFn {
     a: f64,
     b: f64,
@@ -36,7 +36,7 @@ impl Calc<f64> for LinFn {
 ///     freq - linear frequency (in Hz)
 ///     phase - absolute phase (in radians)
 ///     offs - offset (in Volts)
-#[std_fn(amp, freq, phase=0.0, offs=0.0)]
+#[std_fn_f64(amp, freq, phase=0.0, offs=0.0)]
 pub struct Sine {
     amp: f64,
     freq: f64,
@@ -44,9 +44,21 @@ pub struct Sine {
     offs: f64,
 }
 impl Calc<f64> for Sine {
-    fn calc(&self, t_arr: &ArrayView1<f64>, mut x_arr: ArrayViewMut1<f64>) {
-        x_arr.zip_mut_with(t_arr, |res, &t| {
+    fn calc(&self, t_arr: &ArrayView1<f64>, mut res_arr: ArrayViewMut1<f64>) {
+        res_arr.zip_mut_with(t_arr, |res, &t| {
             *res = self.offs + self.amp * f64::sin(2.0*PI * self.freq * t + self.phase)
         });
+    }
+}
+
+/// Boolean constant:
+///     val - value
+#[std_fn_bool]
+pub struct BoolConst {
+    val: bool
+}
+impl Calc<bool> for BoolConst {
+    fn calc(&self, _t_arr: &ArrayView1<f64>, mut res_arr: ArrayViewMut1<bool>) {
+        res_arr.fill(self.val)
     }
 }

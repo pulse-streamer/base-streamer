@@ -11,9 +11,9 @@ use std::str::FromStr;
 pub fn usrlib_boilerplate(_item: TokenStream) -> TokenStream {
     let output_tokens2 = quote!{
         #[pyclass]
-        pub struct UserFnLib {}
+        pub struct UsrFnLib {}
         #[pymethods]
-        impl UserFnLib {
+        impl UsrFnLib {
             #[new]
             pub fn new() -> Self {
                 Self {}
@@ -24,7 +24,7 @@ pub fn usrlib_boilerplate(_item: TokenStream) -> TokenStream {
     TokenStream::from(output_tokens2)
 }
 
-fn lib_fn_macro_base(target_lib: &str, attr_tokens: TokenStream, input_tokens: TokenStream) -> TokenStream {
+fn lib_fn_macro_base(target_lib: &str, samp_type: &str, attr_tokens: TokenStream, input_tokens: TokenStream) -> TokenStream {
     let input_tokens2 = TokenStream2::from(input_tokens.clone());
 
     println!("\n======================\n======================\n======================");
@@ -97,22 +97,26 @@ fn lib_fn_macro_base(target_lib: &str, attr_tokens: TokenStream, input_tokens: T
     // println!("pyo3_sig_tokens: \n{}\n", pyo3_sig_tokens);
 
     let target_lib_tokens = TokenStream2::from_str(target_lib).unwrap();
+    let fn_box_tokens = TokenStream2::from_str(
+        &format!("FnBox{samp_type}")
+    ).unwrap();
     // println!("targer_lib_tokens = {targer_lib_tokens}");
+    // println!("fn_box_tokens = {fn_box_tokens}");
 
-    let pymethods_impl_userlib_tokens = quote!{
+    let pymethods_impl_target_lib_tokens = quote!{
         #[pymethods]
         impl #target_lib_tokens {
             #[allow(non_snake_case)]
             #doc_tokens
             #[pyo3(signature = (#pyo3_sig_tokens))]
-            pub fn #struct_ident(&self, #(#field_ident_ty_tokens),*) -> PyResult<FnBoxF64> {
+            pub fn #struct_ident(&self, #(#field_ident_ty_tokens),*) -> PyResult<#fn_box_tokens> {
                 let fn_inst = #struct_ident::new(#(#field_idents),*);
-                let fn_box = FnBoxF64 { inner: Box::new(fn_inst)};
+                let fn_box = #fn_box_tokens { inner: Box::new(fn_inst)};
                 Ok(fn_box)
             }
         }
     };
-    // println!("pymethods_impl_userlib_tokens: \n{}\n", pymethods_impl_userlib_tokens);
+    // println!("pymethods_impl_target_lib_tokens: \n{}\n", pymethods_impl_target_lib_tokens);
 
     let full_tokens = quote!{
         #[derive(Clone, Debug)]
@@ -120,7 +124,7 @@ fn lib_fn_macro_base(target_lib: &str, attr_tokens: TokenStream, input_tokens: T
 
         #impl_pub_fn_new_tokens
 
-        #pymethods_impl_userlib_tokens
+        #pymethods_impl_target_lib_tokens
     };
     println!("full_tokens: \n{}\n", full_tokens);
 
@@ -129,11 +133,21 @@ fn lib_fn_macro_base(target_lib: &str, attr_tokens: TokenStream, input_tokens: T
 }
 
 #[proc_macro_attribute]
-pub fn usr_fn(attr_tokens: TokenStream, input_tokens: TokenStream) -> TokenStream {
-    lib_fn_macro_base("UserFnLib", attr_tokens, input_tokens)
+pub fn usr_fn_f64(attr_tokens: TokenStream, input_tokens: TokenStream) -> TokenStream {
+    lib_fn_macro_base("UsrFnLib", "F64", attr_tokens, input_tokens)
 }
 
 #[proc_macro_attribute]
-pub fn std_fn(attr_tokens: TokenStream, input_tokens: TokenStream) -> TokenStream {
-    lib_fn_macro_base("StdFnLib", attr_tokens, input_tokens)
+pub fn usr_fn_bool(attr_tokens: TokenStream, input_tokens: TokenStream) -> TokenStream {
+    lib_fn_macro_base("UsrFnLib", "Bool", attr_tokens, input_tokens)
+}
+
+#[proc_macro_attribute]
+pub fn std_fn_f64(attr_tokens: TokenStream, input_tokens: TokenStream) -> TokenStream {
+    lib_fn_macro_base("StdFnLib", "F64", attr_tokens, input_tokens)
+}
+
+#[proc_macro_attribute]
+pub fn std_fn_bool(attr_tokens: TokenStream, input_tokens: TokenStream) -> TokenStream {
+    lib_fn_macro_base("StdFnLib", "Bool", attr_tokens, input_tokens)
 }

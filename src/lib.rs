@@ -187,3 +187,5 @@ pub mod instruction;
 pub mod channel;
 pub mod device;
 pub mod streamer;
+
+pub use fn_lib_tools::usr_lib_prelude;

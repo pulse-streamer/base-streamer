@@ -35,8 +35,8 @@ pub struct FnBoxF64 {
     pub inner: Box<dyn FnTraitSet<f64>>
 }
 
-// #[pyclass]
-// #[derive(Clone)]
-// pub struct FnBoxBool {
-//     pub inner: Box<dyn FnTraitSet<bool>>
-// }
+#[pyclass]
+#[derive(Clone)]
+pub struct FnBoxBool {
+    pub inner: Box<dyn FnTraitSet<bool>>
+}
