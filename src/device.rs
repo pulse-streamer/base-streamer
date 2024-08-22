@@ -110,32 +110,36 @@ where
     }
 
     /// Adds a new channel to the device.
-    fn add_chan(&mut self, chan: C) {
-        assert!(
-            f64::abs(chan.samp_rate() - self.samp_rate()) < 1e-10,
-            "Cannot add channel {} with samp_rate={} to device {} with a different samp_rate={}",
-            chan.name(), chan.samp_rate(), self.name(), self.samp_rate()
-        );
-        assert!(
-            !self.chans().contains_key(&chan.name()),
-            "There is already a channel with name {} registered. Registered channels are {:?}",
-            chan.name(), self.chans().keys()
-        );
+    fn add_chan(&mut self, chan: C) -> Result<(), String> {
+        if f64::abs(chan.samp_rate() - self.samp_rate()) >= 1e-10 {
+            return Err(format!(
+                "Cannot add channel {} with samp_rate={} to device {} with a different samp_rate={}",
+                chan.name(), chan.samp_rate(), self.name(), self.samp_rate()
+            ))
+        }
+        if self.chans().contains_key(&chan.name()) {
+            return Err(format!(
+                "There is already a channel with name {} registered. Registered channels are {:?}",
+                chan.name(), self.chans().keys()
+            ))
+        }
         self.chans_mut().insert(chan.name(), chan);
+        Ok(())
     }
 
-    fn add_reset_instr(&mut self, reset_time: f64) {
+    fn add_reset_instr(&mut self, reset_time: f64) -> Result<(), String> {
         let reset_pos = (reset_time * self.samp_rate()).round() as usize;
         if reset_pos < self.last_instr_end_pos() {
-            panic!(
-                "Given reset_time {reset_time} was rounded to {reset_pos} clock cycles \
+            return Err(format!(
+                "[Device {}] given reset_time {reset_time} was rounded to {reset_pos} clock cycles \
                 which is below the last instruction end_pos {}",
-                self.last_instr_end_pos()
-            )
+                self.name(), self.last_instr_end_pos()
+            ))
         }
         for chan in self.chans_mut().values_mut() {
-            chan.add_reset_instr(reset_pos)
-        }
+            chan.add_reset_instr(reset_pos)?
+        };
+        Ok(())
     }
 
     /// A device is compiled if any of its editable channels are compiled.
@@ -204,13 +208,14 @@ where
     ///
     /// # Arguments
     /// - `stop_time`: The stop time used to compile the channels.
-    fn compile(&mut self, stop_time: f64) -> f64 {
+    fn compile(&mut self, stop_time: f64) -> Result<f64, String> {
         let stop_tick = (stop_time * self.samp_rate()).round() as usize;
         if stop_tick < self.last_instr_end_pos() {
-            panic!(
-                "Given stop_time {stop_time} was rounded to {stop_tick} clock cycles which is below the last instruction end_pos {}",
-                self.last_instr_end_pos()
-            )
+            return Err(format!(
+                "[Device {}] requested stop_time {stop_time} was rounded to {stop_tick} clock cycles \
+                which is below the last instruction end_pos {}",
+                self.name(), self.last_instr_end_pos()
+            ))
         }
 
         // If on any of the channels, the last instruction has `end_spec = Some(end_pos, ...)`
@@ -234,11 +239,11 @@ where
 
         // Compile all channels
         for chan in self.chans_mut().values_mut() {
-            chan.compile(stop_pos)
+            chan.compile(stop_pos)?
         };
 
         // Return the total run duration to generate all the samples:
-        self.total_run_time()
+        Ok(self.total_run_time())
     }
 
     /// Returns a vector of compiled channels based on the given criteria.

@@ -183,21 +183,21 @@ where T: Clone + Debug + Send + Sync + 'static
     /// // Compile the instructions up to a specified stop position.
     /// channel.compile(3e7 as usize); // Compile up to 3 seconds (given a sampling rate of 10^7)
     /// ```
-    fn compile(&mut self, stop_pos: usize) {
+    fn compile(&mut self, stop_pos: usize) -> Result<(), String> {
         // ToDo: use self.instr_fn_mut() directly since no func merging is done
         //  maybe rename `compile` to `calc_pad`
-        //  then also rename self.instr_end and self.instr_fn
 
         self.clear_compile_cache();
 
         if self.instr_list().is_empty() {
-            return;
+            return Ok(())
         }
         if stop_pos < self.last_instr_end_pos() {
-            panic!("Attempting to compile channel {} with stop_pos {} while instructions end at {}",
-                   self.name(),
-                   stop_pos,
-                   self.last_instr_end_pos());
+            return Err(format!(
+                "[Channel {}] Attempting to compile with stop_pos {} while instructions end at {}",
+                self.name(), stop_pos, self.last_instr_end_pos()
+            ))
+
         }
 
         // (1) Calculate exhaustive instruction coverage from 0 to stop_pos (instructions + padding)
@@ -273,6 +273,7 @@ where T: Clone + Debug + Send + Sync + 'static
         assert_eq!(self.total_samps(), stop_pos);
 
         *self.fresh_compiled_mut() = true;
+        Ok(())
     }
 
     /// Clears the `instr_list` field of the channel.
@@ -475,13 +476,13 @@ where T: Clone + Debug + Send + Sync + 'static
     fn constant(&mut self, val: T, t: f64, dur_spec: Option<(f64, bool)>) {
         self.add_instr(Box::new(ConstFn::new(val)), t, dur_spec);
     }
-    fn add_reset_instr(&mut self, reset_pos: usize) {
+    fn add_reset_instr(&mut self, reset_pos: usize) -> Result<(), String> {
         if reset_pos < self.last_instr_end_pos() {
-            panic!(
-                "Requested to insert reset instruction at reset_pos = {reset_pos} \
+            return Err(format!(
+                "Requested channel {} to insert reset instruction at reset_pos = {reset_pos} \
                 which is below the last_instr_end_pos = {}",
-                self.last_instr_end_pos()
-            )
+                self.name(), self.last_instr_end_pos()
+            ))
         }
         let reset_instr = Instr::new(
             reset_pos,
@@ -489,6 +490,7 @@ where T: Clone + Debug + Send + Sync + 'static
             Box::new(ConstFn::new(self.rst_val()))
         );
         self.instr_list_mut().insert(reset_instr);
+        Ok(())
     }
 
     /// Utility function for signal sampling.
