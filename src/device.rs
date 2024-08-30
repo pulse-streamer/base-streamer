@@ -399,7 +399,7 @@ where
                 start_pos,
                 res_arr.slice_mut(s![chan_idx, ..]),
                 t_arr.view()
-            )
+            )?;
         }
         Ok(res_arr)
     }

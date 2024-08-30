@@ -65,6 +65,7 @@
 
 use ndarray::{s, Array1, ArrayView1, ArrayViewMut1};
 use std::collections::BTreeSet;
+use std::cmp::Ordering;
 use std::fmt::{Debug, Formatter};
 
 use crate::instruction::Instr;
@@ -493,185 +494,189 @@ where T: Clone + Debug + Send + Sync + 'static
         Ok(())
     }
 
-    /// Utility function for signal sampling.
+    /// Returns the index of the instruction which is intersected by x_pos.
     ///
-    /// Assuming a compiled channel (does not check), this utility function uses a binary search
-    /// to efficiently determine the index of the first instruction whose end position is no less than
-    /// the given `start_pos`.
+    /// x_pos "intersects" instruction with instr_start_pos and instr_end_pos when
+    ///     instr_start_pos <= x_pos < instr_end_pos
     ///
-    /// Note: This function assumes that `instr_end` is sorted in ascending order. It does not perform
-    /// any checks for this condition.
+    /// If x_pos = self.total_samps() (that is, points at the end_pos of the last instruction),
+    /// the index of the last instruction is returned.
     ///
-    /// # Arguments
-    ///
-    /// * `start_pos` - The starting position for which to find the intersecting instruction.
-    ///
-    /// # Returns
-    ///
-    /// Returns the index `i` of the first instruction such that `self.instr_end[i] >= pos`
-    /// If no such instruction is found, the function returns an index pointing to where
-    /// the `pos` would be inserted to maintain the sorted order.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use nicompiler_backend::channel::*;
-    /// let mut channel = Channel::new(TaskType::DO, "port0/line0", 1e7, 0.);
-    /// channel.instr_end_().extend([10, 20, 30, 40, 50].iter());
-    ///
-    /// assert_eq!(channel.binfind_first_intersect_instr(15), 1);
-    /// assert_eq!(channel.binfind_first_intersect_instr(20), 1);
-    /// assert_eq!(channel.binfind_first_intersect_instr(25), 2);
-    /// assert_eq!(channel.binfind_first_intersect_instr(55), 5);
-    /// assert_eq!(channel.binfind_first_intersect_instr(5), 0);
-    /// ```
-    fn binfind_first_intersect_instr(&self, start_pos: usize) -> usize {
-        let mut low: i32 = 0;
-        let mut high: i32 = self.compile_cache_ends().len() as i32 - 1;
-        while low <= high {
-            let mid = ((low + high) / 2) as usize;
-            if self.compile_cache_ends()[mid] < start_pos {
-                low = mid as i32 + 1;
-            } else if self.compile_cache_ends()[mid] > start_pos {
-                high = mid as i32 - 1;
-            } else {
-                return mid as usize;
-            }
+    /// ### Provable convergence guarantees
+    /// One can prove that at every iteration of the loop:
+    /// * low_idx is strictly lower than high_idx (and once they become equal, we immediately break out)
+    /// * distance between low_idx and high_idx reduces by at least 1
+    /// This is why the search is guaranteed to converge in at most (high_idx - low_idx) iterations.
+    /// This algorithm is also robust against "slips by 1" in mid_idx due to floor() and rounding errors.
+    fn binfind_intersect_instr(&self, x_pos: usize) -> Result<usize, String> {
+        // Assertions (avoid launching panics and return errors instead):
+        if self.compile_cache_ends().is_empty() {
+            return Err(format!(
+                "[chan {}] binary find called with empty compile cache", self.name()
+            ))
         }
-        low as usize
+        if !(x_pos <= self.total_samps()) {
+            return Err(format!(
+                "[chan {}] binary find: requested x_pos {x_pos} exceeds last end_pos {}",
+                self.name(), self.total_samps()
+            ))
+        }
+
+        let mut low_idx = 0;
+        let mut high_idx = self.compile_cache_ends().len() - 1;
+
+        loop {
+            if low_idx == high_idx {
+                break
+            }
+            let mid_idx = ((low_idx + high_idx) as f64 / 2.0).floor() as usize;
+            let mid_end_pos = self.compile_cache_ends()[mid_idx];
+
+            match x_pos.cmp(&mid_end_pos) {
+                Ordering::Less => high_idx = mid_idx,
+                Ordering::Greater => low_idx = mid_idx + 1,
+                Ordering::Equal => return Ok(mid_idx + 1)
+            };
+        }
+        Ok(low_idx)
     }
 
     /// Argument `t_arr` is redundant
     /// (it can already be calculated knowing `start_pos`, `res_arr.len()`, and `self.samp_rate()`)
     /// but we require it for efficiency reason - the calling `BaseDev` calculates the `t_arr` once
     /// and then reuses it for every channel by lending a read-only view.
-    fn fill_samps(&self, start_pos: usize, mut res_arr: ArrayViewMut1<T>, t_arr: ArrayView1<f64>) {
-        // ToDo: rewrite this function as a call to `fill_signal_nsamps()`
+    fn fill_samps(&self, start_pos: usize, mut res_arr: ArrayViewMut1<T>, t_arr: ArrayView1<f64>) -> Result<(), String> {
+        // Sanity checks (avoid launching panics and return errors instead):
+        if !self.is_compiled() {
+            return Err(format!(
+                "[Chan {}] fill_samps(): Attempting to calculate signal on not-compiled channel",
+                self.name()
+            ))
+        }
+        if res_arr.len() != t_arr.len() {
+            return Err(format!(
+                "[Chan {}] fill_samps(): provided res_arr.len() = {} and t_arr.len() = {} do not match",
+                self.name(), res_arr.len(), t_arr.len()
+            ))
+        }
+        // Window boundaries, start_pos is included and end_pos is not included:
+        let w_start_pos = start_pos;
+        let w_end_pos = w_start_pos + res_arr.len();
+        if w_end_pos > self.total_samps() {
+            return Err(format!(
+                "[Chan {}] fill_samps: Requested window end position \n\
+                \t w_start_pos + res_arr.len() = {w_start_pos} + {} = {w_end_pos} \n\
+                exceeds the compile cache end_pos {}",
+                self.name(), res_arr.len(), self.total_samps()
+            ))
+        }
 
-        assert!(self.is_compiled(), "Attempting to calculate signal on not-compiled channel {}", self.name());
-        assert_eq!(res_arr.len(), t_arr.len());
+        // Find all instructions covered (fully or partially) by this window
+        let first_instr_idx = self.binfind_intersect_instr(w_start_pos)?;
+        let last_instr_idx = self.binfind_intersect_instr(w_end_pos)?;
 
-        let end_pos = start_pos + res_arr.len();
-        assert!(end_pos <= self.total_samps());
+        // Helper to map "absolute" clock grid position onto the appropriate t/res_arr index - subtract window start_pos
+        let rm_offs = |pos| {pos - w_start_pos};
 
-        let first_instr_idx = self.binfind_first_intersect_instr(start_pos);
-        let last_instr_idx = self.binfind_first_intersect_instr(end_pos);
+        let mut cur_pos = w_start_pos;
+        for idx in first_instr_idx..=last_instr_idx {
+            /* last_instr_idx is included
+            Special case note:
+                if there is an instruction with start_pos = window_end_pos,
+                it is not covered by that window but will technically be included as last_instr_idx.
+                But since it will have next_pos=cur_pos=window_end_pos, the slice will have zero length
+                and ndarray::zip_with_mut() will simply skips this iteration without mutating res_arr.
+            */
 
-        let mut cur_pos = start_pos;
-        for instr_idx in first_instr_idx..=last_instr_idx {
-            let next_pos = std::cmp::min(end_pos, self.compile_cache_ends()[instr_idx]);
-            self.compile_cache_fns()[instr_idx].calc(
-                &t_arr.slice(s![cur_pos..next_pos]),
-                res_arr.slice_mut(s![cur_pos..next_pos])
+            let instr_end_pos = self.compile_cache_ends()[idx];
+            let instr_func = &self.compile_cache_fns()[idx];
+
+            let next_pos = std::cmp::min(instr_end_pos, w_end_pos);
+            instr_func.calc(
+                &t_arr.slice(s![rm_offs(cur_pos)..rm_offs(next_pos)]),
+                res_arr.slice_mut(s![rm_offs(cur_pos)..rm_offs(next_pos)])
             );
             cur_pos = next_pos;
-        }
+        };
+        Ok(())
     }
 
-    /// Fills a buffer (1D view of array) with the signal samples derived from a channel's instructions.
-    ///
-    /// This method samples the float-point signal from channel's compile cache
-    /// between the positions `start_pos` and `end_pos`, and replaces the contents of the buffer with results.
-    /// The number of samples is given by `num_samps`. Time-dependent instructions assume that
-    /// the buffer is already populated with correctly sampled time values.
-    ///
-    /// # Arguments
-    ///
-    /// * `start_pos` - The starting position in the channel's instructions to begin sampling.
-    /// * `end_pos` - The ending position in the channel's instructions to stop sampling.
-    /// * `num_samps` - The number of samples required.
-    /// * `buffer` - A mutable reference to an `ndarray::ArrayViewMut1<f64>` that will hold the sampled signal values.
-    ///
-    /// # Panics
-    ///
-    /// * If the channel is not compiled.
-    /// * If `end_pos` is not greater than `start_pos`.
-    /// * If `end_pos` exceeds the duration of the channel's compiled instructions.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// # use nicompiler_backend::channel::*;
-    /// # use nicompiler_backend::instruction::*;
-    /// let mut channel = Channel::new(TaskType::AO, "ao0", 1e6, 0.);
-    /// // Sample 100 samples from t=0 to t=10s
-    /// let (start_pos, end_pos, num_samps) = (0, 1e7 as usize, 100);
-    ///
-    /// // Add an sine instruction sig=sin(2*pi*t*7.5) + 1 from t=0.5~9.5 which keeps its value
-    /// let sine_instr = Instruction::new_sine(7.5, None, None, Some(1.0));
-    /// channel.add_instr(sine_instr, 0.5, 9., true);
-    /// channel.compile(1e7 as usize); // Compile the channel to stop at 10s (1e7 samples)
-    ///
-    /// let mut buffer = ndarray::Array1::<f64>::zeros(num_samps);
-    /// channel.fill_signal_nsamps(start_pos, end_pos, num_samps, &mut buffer.view_mut());
-    ///
-    /// assert_eq!(buffer[0], 0.);
-    /// assert_eq!(buffer[99], 2.);
-    /// ```
-    ///
-    /// # Notes
-    ///
-    /// The method uses binary search to find the starting and ending instruction indices that intersect
-    /// with the provided interval `[start_pos, end_pos]`. It then iterates over these instructions
-    /// to sample the signal and populate the buffer. Time conversion is done internally to map
-    /// between the position indices and the buffer's time values.
-    fn fill_signal_nsamps(
-        &self,
-        start_pos: usize,
-        end_pos: usize,
-        num_samps: usize,
-        t_arr: ArrayView1<f64>,
-        mut res_arr: ArrayViewMut1<T>,
-    ) {
-        assert!(
-            self.is_compiled(),
-            "Attempting to calculate signal on not-compiled channel {}",
-            self.name()
-        );
-        assert!(
-            end_pos > start_pos,
-            "Channel {} attempting to calculate signal for invalid interval {}-{}",
-            self.name(),
-            start_pos,
-            end_pos
-        );
-        assert!(
-            end_pos <= self.total_samps(),
-            "Attempting to calculate signal interval {}-{} for channel {}, which ends at {}",
-            start_pos,
-            end_pos,
-            self.name(),
-            self.total_samps()
-        );
+    /// This this function is only used for plotting in Python
+    /// Here samples are calculated at time points which don't necessarily match sample clock grid ticks.
+    /// Typically, users will request n_samps which is smaller than the actual number of clock ticks
+    /// between start_time and end_time because otherwise plotting may be extremely slow.
+    fn calc_nsamps(&self, n_samps: usize, start_time: Option<f64>, end_time: Option<f64>) -> Result<Vec<T>, String> {
+        if !self.is_compiled() {
+            return Err(format!(
+                "[Chan {}] Attempting to calculate signal on not-compiled channel", self.name()
+            ))
+        }
 
-        let start_instr_idx: usize = self.binfind_first_intersect_instr(start_pos);
-        let end_instr_idx: usize = self.binfind_first_intersect_instr(end_pos);
-        // Function for converting position idx (unit of start_pos, end_pos) to buffer offset
-        // Linear function: start_pos |-> 0, end_pos |-> num_samps
-        let cvt_idx = |pos| {
-            ((pos - start_pos) as f64 / (end_pos - start_pos) as f64 * (num_samps as f64)) as usize
+        let start_time = match start_time {
+            Some(start_time) => start_time,
+            None => 0.0
+        };
+        let end_time = match end_time {
+            Some(end_time) => {
+                if end_time > self.total_run_time() {
+                    return Err(format!(
+                        "[Chan {}] requested end_time {end_time} exceeds total_run_time {}. \
+                        If you intended to specify end_time = total_run_time, use end_time = None",
+                        self.name(), self.total_run_time()
+                    ))
+                }
+                end_time
+            },
+            None => self.total_run_time()
+        };
+        if end_time < start_time {
+            return Err(format!(
+                "[Chan {}] requested end_time {end_time} is below start_time {start_time}",
+                self.name()
+            ))
+        }
+
+        let t_arr = Array1::linspace(start_time, end_time, n_samps);
+        let mut res_arr = Array1::from_elem(n_samps, self.dflt_val());
+
+        // We use the "absolute" position on the underlying sample clock grid
+        // to determine which instructions overlap with the start_time-end_time window
+        // and to keep track of current position when sweeping.
+        //
+        // Note that the actual samples will be evaluated at times from t_arr,
+        // which generally fall somewhere between sample clock ticks.
+
+        // "Absolute" window boundaries
+        let w_start_pos = (start_time * self.samp_rate()).round() as usize;
+        let w_end_pos = (end_time * self.samp_rate()).round() as usize;
+
+        // Find all instructions overlapping with this window
+        let first_instr_idx = self.binfind_intersect_instr(w_start_pos)?;
+        let last_instr_idx = self.binfind_intersect_instr(w_end_pos)?;
+
+        // Below is the helper function to map the "absolute" position onto the t/res_arr indexes:
+        //      linear function: w_start_pos |-> 0, w_end_pos |-> n_samps
+        let cvt_pos = |pos| {
+            let frac = (pos - w_start_pos) as f64 / (w_end_pos - w_start_pos) as f64;
+            (n_samps as f64 * frac).round() as usize
         };
 
-        let mut cur_pos: usize = start_pos as usize;
-        for i in start_instr_idx..=end_instr_idx {
-            let next_pos = std::cmp::min(end_pos, self.compile_cache_ends()[i]);
-            let t_arr_slice = t_arr.slice(s![cvt_idx(cur_pos)..cvt_idx(next_pos)]);
-            let res_arr_slice = res_arr.slice_mut(s![cvt_idx(cur_pos)..cvt_idx(next_pos)]);
-            self.compile_cache_fns()[i].calc(&t_arr_slice, res_arr_slice);
+        // Jump over absolute end_positions of all covered instructions
+        // to sweep the full range from w_start_pos to w_end_pos.
+        // That in turn will sweep the full index range from 0 to n_samps of t_arr and res_arr.
+        let mut cur_pos = w_start_pos;
+        for idx in first_instr_idx..=last_instr_idx {
+            let instr_end_pos = self.compile_cache_ends()[idx];
+            let instr_func = &self.compile_cache_fns()[idx];
+
+            let next_pos = std::cmp::min(instr_end_pos, w_end_pos);
+            instr_func.calc(
+                &t_arr.slice(s![cvt_pos(cur_pos)..cvt_pos(next_pos)]),
+                res_arr.slice_mut(s![cvt_pos(cur_pos)..cvt_pos(next_pos)])
+            );
             cur_pos = next_pos;
-        }
-    }
-    /// Calls `fill_signal_nsamps` with the appropriate buffer and returns signal vector.
-    /// The in-place version `fill_signal_nsamps` is preferred to this method for efficiency.
-    /// This is mainly a wrapper to expose channel-signal sampling to Python
-    fn calc_signal_nsamps(&self, start_time: f64, end_time: f64, num_samps: usize) -> Vec<T> {
-        // ToDo: this function is only used for plotting. Rewrite as a concise "eval_signal(...)" function
-        let t_arr = Array1::linspace(start_time, end_time, num_samps);
-        let mut res_arr = Array1::from_elem(num_samps, self.dflt_val());
-        let start_pos = (start_time * self.samp_rate()).round() as usize;
-        let end_pos = (end_time * self.samp_rate()).round() as usize;
-        self.fill_signal_nsamps(start_pos, end_pos, num_samps, t_arr.view(), res_arr.view_mut());
-        res_arr.to_vec()
+        };
+        Ok(res_arr.to_vec())
     }
 }
 
