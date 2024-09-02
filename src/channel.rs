@@ -378,7 +378,7 @@ where T: Clone + Debug + Send + Sync + 'static
     /// "Channel port0/line0
     ///  Instruction InstrBook([CONST, {value: 1}], 5000000-15000000, false) overlaps with the next instruction InstrBook([CONST, {value: 1}], 5000000-5010000, true)"
     /// ```
-    fn add_instr(&mut self, func: Box<dyn FnTraitSet<T>>, t: f64, dur_spec: Option<(f64, bool)>) {
+    fn add_instr(&mut self, func: Box<dyn FnTraitSet<T>>, t: f64, dur_spec: Option<(f64, bool)>) -> Result<(), String> {
         // Sanity check - non-negative start time (compare with negative clock half-period to avoid virtual panics for nominal t=0.0)
         assert!(t > -0.5*self.clk_period(), "Attempted to insert an instruction at negative start time {t}");
 
@@ -392,7 +392,8 @@ where T: Clone + Debug + Send + Sync + 'static
                     let t_start_clock = t * self.samp_rate();
                     let t_stop = t + dur;
                     let t_stop_clock = t_stop * self.samp_rate();
-                    panic!("\n\
+                    return Err(format!(
+                        "[Chan {}]\n\
                         Requested pulse is too short and collapsed due to rounding to the sample clock grid:\n\
                         \n\
                         \t       requested start t = {t}s = {t_start_clock} clock periods was rounded to {start_pos}\n\
@@ -400,7 +401,9 @@ where T: Clone + Debug + Send + Sync + 'static
                         \n\
                         Note: the shortest pulse length the streamer can produce is 1 sample clock period.\n\
                         For such short pulses it is very important to align pulse edges with the clock grid\n\
-                        otherwise rounding may lead to significant deviations.");
+                        otherwise rounding may lead to significant deviations.",
+                        self.name()
+                    ))
                 }
                 Some((end_pos, keep_val))
             },
@@ -433,11 +436,14 @@ where T: Clone + Debug + Send + Sync + 'static
                 };
             } else {
                 // Serious collision of 2 or more ticks due to a user mistake
-                panic!("\n\
+                return Err(format!(
+                    "[Chan {}]\n\
                     Collision on the left with the following existing instruction:\n\
                     \t{prev}\n\
                     The new instruction is:\n\
-                    \t{new_instr}")
+                    \t{new_instr}",
+                    self.name()
+                ))
             }
         }
         // - collision on the right
@@ -458,20 +464,27 @@ where T: Clone + Debug + Send + Sync + 'static
                         assert!(dur - 1 >= 1, "1-tick collision on the right cannot be resolved by trimming since the new instruction is only 1 tick long");
                         new_instr.end_spec_mut().as_mut().unwrap().0 -= 1;
                     },
-                    None => panic!("Attempt to insert go_something-type instruction {new_instr} right at the start of another instruction {next}"),
+                    None => return Err(format!(
+                        "[Chan {}] Attempt to insert go_something-type instruction {new_instr} right at the start of another instruction {next}",
+                        self.name()
+                    )),
                 }
             } else {
                 // Serious collision of 2 or more ticks due to a user mistake
-                panic!("\n\
+                return Err(format!(
+                    "[Chan {}]\n\
                     The new instruction:\n\
                     \t{new_instr}\n\
                     collides on the right with the following existing instruction:\n\
-                    \t{next}")
+                    \t{next}",
+                    self.name()
+                ))
             };
         };
 
         self.instr_list_mut().insert(new_instr);
         *self.fresh_compiled_mut() = false;
+        Ok(())
     }
     /// Utility function to add a constant instruction to the channel
     fn constant(&mut self, val: T, t: f64, dur_spec: Option<(f64, bool)>) {
