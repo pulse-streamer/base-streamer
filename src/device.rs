@@ -32,7 +32,7 @@
 //!
 //! [`channel` module]: crate::channel
 
-use ndarray::{Array1, Array2, s};
+use ndarray::{Array1, Array2, ArrayViewMut2, s};
 use indexmap::IndexMap;
 use std::fmt::Debug;
 
@@ -356,7 +356,7 @@ where
     /// This method will panic if:
     /// - There are no channels that fulfill the provided requirements.
     /// - The device's task type is not AO (Analog Output) when initializing the buffer with time data.
-    fn calc_samps(&self, start_pos: usize, end_pos: usize) -> Result<Array2<T>, String> {
+    fn calc_samps(&self, mut samp_arr: ArrayViewMut2<T>, start_pos: usize, end_pos: usize) -> Result<(), String> {
         let n_chans = self.compiled_chans().len();
         let n_samps = end_pos - start_pos;
 
@@ -397,11 +397,11 @@ where
         for (chan_idx, chan) in self.compiled_chans().iter().enumerate() {
             chan.fill_samps(
                 start_pos,
-                res_arr.slice_mut(s![chan_idx, ..]),
+                samp_arr.slice_mut(s![chan_idx, ..n_samps]),
                 t_arr.view()
             )?;
         }
-        Ok(res_arr)
+        Ok(())
     }
 }
 
