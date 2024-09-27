@@ -32,7 +32,7 @@
 //!
 //! [`channel` module]: crate::channel
 
-use ndarray::{Array1, Array2, ArrayViewMut2, s};
+use ndarray::{Array1, ArrayViewMut1, s};
 use indexmap::IndexMap;
 use std::fmt::Debug;
 
@@ -356,7 +356,7 @@ where
     /// This method will panic if:
     /// - There are no channels that fulfill the provided requirements.
     /// - The device's task type is not AO (Analog Output) when initializing the buffer with time data.
-    fn calc_samps(&self, mut samp_arr: ArrayViewMut2<T>, start_pos: usize, end_pos: usize) -> Result<(), String> {
+    fn calc_samps(&self, mut samp_buf: ArrayViewMut1<T>, start_pos: usize, end_pos: usize) -> Result<(), String> {
         let n_chans = self.compiled_chans().len();
         let n_samps = end_pos - start_pos;
 
@@ -388,16 +388,19 @@ where
         let end_t = (end_pos - 1) as f64 * self.clk_period();
         let t_arr = Array1::linspace(start_t, end_t, n_samps);
 
-        let mut res_arr = Array2::from_elem(
-            (n_chans, n_samps),
-            self.compiled_chans().first().unwrap().dflt_val()
-            // need to fill with some initial value of type T. Actual value does not matter, using chan.dflt_val()
-        );
+            // let res_arr_alloc_start = Instant::now();  // ToDo: testing
+        // let mut res_arr = Array2::from_elem(
+        //     (n_chans, n_samps),
+        //     self.compiled_chans().first().unwrap().dflt_val()  // FixMe: handle the case when self.compiled_chans() is empty
+        //     // need to fill with some initial value of type T. Actual value does not matter, using chan.dflt_val()
+        // );
+        //     let elapsed = res_arr_alloc_start.elapsed().as_millis();  // ToDo: testing
+        //     println!("[{}] calc_samps arr alloc: {elapsed} ms", self.name());
 
         for (chan_idx, chan) in self.compiled_chans().iter().enumerate() {
             chan.fill_samps(
                 start_pos,
-                samp_arr.slice_mut(s![chan_idx, ..n_samps]),
+                samp_buf.slice_mut(s![chan_idx * n_samps .. (chan_idx + 1) * n_samps]),
                 t_arr.view()
             )?;
         }
