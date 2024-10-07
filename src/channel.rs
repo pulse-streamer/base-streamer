@@ -63,7 +63,7 @@
 //! AO channels are both streamable and editable. DO line channels are editable but not streamable, and DO port
 //! channels are non-editable yet streamable.
 
-use ndarray::{s, Array1, ArrayView1, ArrayViewMut1};
+use ndarray::Array1;
 use std::collections::BTreeSet;
 use std::cmp::Ordering;
 use std::fmt::{Debug, Formatter};
@@ -81,7 +81,7 @@ impl<T> ConstFn<T> {
     }
 }
 impl<T: Clone> Calc<T> for ConstFn<T> {
-    fn calc(&self, _t_arr: &ArrayView1<f64>, mut res_arr: ArrayViewMut1<T>) {
+    fn calc(&self, _t_arr: &[f64], res_arr: &mut [T]) {
         res_arr.fill(self.val.clone())
     }
 }
@@ -232,11 +232,11 @@ where T: Clone + Debug + Send + Sync + 'static
                         let pad_val = if keep_val {
                             // Evaluate the function at t corresponding to end_pos
                             let end_t = end_pos as f64 * self.clk_period();
-                            let t_arr = Array1::from_vec(vec![end_t]);
-                            let mut res_arr = Array1::from_vec(vec![self.dflt_val()]);
+                            let t_arr = vec![end_t];
+                            let mut res_arr = vec![self.dflt_val()];
                             instr.func().calc(
-                                &t_arr.view(),
-                                res_arr.view_mut()
+                                &t_arr[..],
+                                &mut res_arr[..]
                             );
                             res_arr.to_vec().pop().unwrap()
                         } else {
@@ -558,7 +558,7 @@ where T: Clone + Debug + Send + Sync + 'static
     /// (it can already be calculated knowing `start_pos`, `res_arr.len()`, and `self.samp_rate()`)
     /// but we require it for efficiency reason - the calling `BaseDev` calculates the `t_arr` once
     /// and then reuses it for every channel by lending a read-only view.
-    fn fill_samps(&self, start_pos: usize, mut res_arr: ArrayViewMut1<T>, t_arr: ArrayView1<f64>) -> Result<(), String> {
+    fn fill_samps(&self, start_pos: usize, res_arr: &mut [T], t_arr: &[f64]) -> Result<(), String> {
         // Sanity checks (avoid launching panics and return errors instead):
         if !self.is_compiled() {
             return Err(format!(
@@ -606,8 +606,8 @@ where T: Clone + Debug + Send + Sync + 'static
 
             let next_pos = std::cmp::min(instr_end_pos, w_end_pos);
             instr_func.calc(
-                &t_arr.slice(s![rm_offs(cur_pos)..rm_offs(next_pos)]),
-                res_arr.slice_mut(s![rm_offs(cur_pos)..rm_offs(next_pos)])
+                &t_arr[rm_offs(cur_pos)..rm_offs(next_pos)],
+                &mut res_arr[rm_offs(cur_pos)..rm_offs(next_pos)]
             );
             cur_pos = next_pos;
         };
@@ -651,6 +651,8 @@ where T: Clone + Debug + Send + Sync + 'static
 
         let t_arr = Array1::linspace(start_time, end_time, n_samps);
         let mut res_arr = Array1::from_elem(n_samps, self.dflt_val());
+        let t_arr_slice = t_arr.as_slice().expect("[BaseChan::calc_nsamps()] BUG: t_arr.as_slice() returned None");
+        let res_arr_slice = res_arr.as_slice_mut().expect("[BaseChan::calc_nsamps()] BUG: res_arr.as_slice_mut() returned None");
 
         // We use the "absolute" position on the underlying sample clock grid
         // to determine which instructions overlap with the start_time-end_time window
@@ -684,8 +686,8 @@ where T: Clone + Debug + Send + Sync + 'static
 
             let next_pos = std::cmp::min(instr_end_pos, w_end_pos);
             instr_func.calc(
-                &t_arr.slice(s![cvt_pos(cur_pos)..cvt_pos(next_pos)]),
-                res_arr.slice_mut(s![cvt_pos(cur_pos)..cvt_pos(next_pos)])
+                &t_arr_slice[cvt_pos(cur_pos)..cvt_pos(next_pos)],
+                &mut res_arr_slice[cvt_pos(cur_pos)..cvt_pos(next_pos)]
             );
             cur_pos = next_pos;
         };
