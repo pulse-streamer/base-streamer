@@ -63,10 +63,11 @@
 //! AO channels are both streamable and editable. DO line channels are editable but not streamable, and DO port
 //! channels are non-editable yet streamable.
 
-use ndarray::Array1;
 use std::collections::BTreeSet;
 use std::cmp::Ordering;
 use std::fmt::{Debug, Formatter};
+
+use ndarray::Array1;
 
 use crate::instruction::Instr;
 use crate::fn_lib_tools::{FnTraitSet, Calc};
@@ -487,8 +488,8 @@ where T: Clone + Debug + Send + Sync + 'static
         Ok(())
     }
     /// Utility function to add a constant instruction to the channel
-    fn constant(&mut self, val: T, t: f64, dur_spec: Option<(f64, bool)>) {
-        self.add_instr(Box::new(ConstFn::new(val)), t, dur_spec);
+    fn constant(&mut self, val: T, t: f64, dur_spec: Option<(f64, bool)>) -> Result<(), String> {
+        self.add_instr(Box::new(ConstFn::new(val)), t, dur_spec)
     }
     fn add_reset_instr(&mut self, reset_pos: usize) -> Result<(), String> {
         if reset_pos < self.last_instr_end_pos() {
