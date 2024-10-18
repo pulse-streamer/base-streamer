@@ -561,9 +561,9 @@ where T: Clone + Debug + Send + Sync + 'static
     /// and then reuses it for every channel by lending a read-only view.
     fn fill_samps(&self, start_pos: usize, res_arr: &mut [T], t_arr: &[f64]) -> Result<(), String> {
         // Sanity checks (avoid launching panics and return errors instead):
-        if !self.is_compiled() {
+        if !self.is_fresh_compiled() {
             return Err(format!(
-                "[Chan {}] fill_samps(): Attempting to calculate signal on not-compiled channel",
+                "[Chan {}] fill_samps(): Compile before attempting to calculate samples.",
                 self.name()
             ))
         }
