@@ -14,6 +14,19 @@ impl StdFnLib {
     }
 }
 
+// region F64 functions
+/// Constant function:
+///     val: value
+#[std_fn_f64]
+pub struct ConstF64 {
+    val: f64
+}
+impl Calc<f64> for ConstF64 {
+    fn calc(&self, _t_arr: &[f64], res_arr: &mut [f64]) {
+        res_arr.fill(self.val)
+    }
+}
+
 /// Linear function:
 ///     a: slope
 ///     b: offset
@@ -49,15 +62,18 @@ impl Calc<f64> for Sine {
         }
     }
 }
+// endregion
 
+// region Bool functions
 /// Boolean constant:
 ///     val - value
 #[std_fn_bool]
-pub struct BoolConst {
+pub struct ConstBool {
     val: bool
 }
-impl Calc<bool> for BoolConst {
+impl Calc<bool> for ConstBool {
     fn calc(&self, _t_arr: &[f64], res_arr: &mut [bool]) {
         res_arr.fill(self.val)
     }
 }
+// endregion
