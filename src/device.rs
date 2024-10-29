@@ -144,6 +144,10 @@ where
     /// A device is compiled if any of its editable channels are compiled.
     /// Also see [`BaseChannel::is_compiled`]
     fn is_compiled(&self) -> bool {
+        // FixMe: SERIOUS PROBLEM after introducing BaseChan::eval_point()
+        //  Currently, calling chan::eval_point() will lead to this dev claiming is_compiled=true
+        //  Possible solution: device has its' own `is_fresh_compiled` field which only updates if `device.compile()` is called
+        //  instead of looking at individual channel compile states
         self.chans().values().any(|chan| chan.is_compiled())
     }
     /// A device is marked edited if any of its editable channels are edited.
@@ -207,7 +211,7 @@ where
     ///
     /// # Arguments
     /// - `stop_time`: The stop time used to compile the channels.
-    fn compile(&mut self, stop_time: f64) -> Result<f64, String> {
+    fn compile_base(&mut self, stop_time: f64) -> Result<f64, String> {
         let stop_tick = (stop_time * self.samp_rate()).round() as usize;
         if stop_tick < self.last_instr_end_pos() {
             return Err(format!(
@@ -243,6 +247,10 @@ where
 
         // Return the total run duration to generate all the samples:
         Ok(self.total_run_time())
+    }
+
+    fn compile(&mut self, stop_time: f64) -> Result<f64, String> {
+        self.compile_base(stop_time)
     }
 
     /// Returns a vector of compiled channels based on the given criteria.
