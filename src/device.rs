@@ -403,10 +403,10 @@ where
         let t_arr = Array1::linspace(start_t, end_t, n_samps);
         let t_arr_slice = t_arr.as_slice().expect("[BaseDev::calc_samps()] BUG: t_arr.as_slice() returned None");
 
-        for (chan_idx, chan) in self.compiled_chans().iter().enumerate() {
+        for (chan_row_idx, chan) in self.compiled_chans().iter().enumerate() {
             chan.fill_samps(
                 start_pos,
-                &mut samp_buf[chan_idx * n_samps .. (chan_idx + 1) * n_samps],
+                &mut samp_buf[chan_row_idx * n_samps .. (chan_row_idx + 1) * n_samps],
                 &t_arr_slice
             )?;
         }
