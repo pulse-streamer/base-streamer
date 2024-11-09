@@ -364,9 +364,6 @@ where
     /// - There are no channels that fulfill the provided requirements.
     /// - The device's task type is not AO (Analog Output) when initializing the buffer with time data.
     fn calc_samps(&self, samp_buf: &mut [T], start_pos: usize, end_pos: usize) -> Result<(), String> {
-        let n_chans = self.compiled_chans().len();
-        let n_samps = end_pos - start_pos;
-
         // Sanity checks
         //  Do not launch panics in this function since it is used during streaming runtime. Return `Result::Err` instead.
         /*      During streaming, there is an active connection to the hardware driver.
@@ -377,24 +374,22 @@ where
         if !self.is_fresh_compiled() {
             return Err(format!("calc_samps(): device {} is not fresh-compiled", self.name()))
         }
-        if !(n_chans * n_samps <= samp_buf.len()) {
+
+        if !(end_pos >= start_pos + 1) {
+            return Err(format!("calc_samps(): requested start_pos={start_pos} and end_pos={end_pos} are invalid - end_pos must be no less than start_pos + 1"))
+        }
+
+        if !(end_pos <= self.total_samps()) {
+            return Err(format!("calc_samps(): requested end_pos={end_pos} exceeds the compiled stop position {}", self.total_samps()))
+        }
+
+        let n_chans = self.compiled_chans().len();
+        let n_samps = end_pos - start_pos;
+        if n_chans * n_samps > samp_buf.len() {
             return Err(format!(
                 "calc_samps(): provided samp_buf has insufficient size:\n\
-                \t n_chans*n_samps={} is less than samp_buf.len()={}",
+                \t n_chans*n_samps={} exceeds samp_buf.len()={}",
                 n_chans * n_samps, samp_buf.len()
-            ))
-        }
-        if !(end_pos <= self.total_samps()) {
-            return Err(format!(
-                "calc_samps(): requested end_pos = {end_pos} is beyond the compiled stop position {}",
-                self.total_samps()
-            ))
-        }
-        if !(n_samps >= 1) {
-            return Err(format!(
-                "calc_samps(): requested sample number \n\
-                \t (end_pos - start_pos) = ({end_pos} - {start_pos}) = {n_samps}\
-                is invalid. sample number must be 1 or greater"
             ))
         }
 
