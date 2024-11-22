@@ -246,7 +246,7 @@ where
         };
 
         // Return the total run duration to generate all the samples:
-        Ok(self.total_run_time())
+        Ok(self.compiled_stop_time())
     }
 
     fn compile(&mut self, stop_time: f64) -> Result<f64, String> {
@@ -272,7 +272,7 @@ where
     }
 
     /// Returns the total number of samples the card will generate according to the current compile cache.
-    fn total_samps(&self) -> usize {
+    fn compiled_stop_pos(&self) -> usize {
         // The assumption is that all the channels of any given device
         // must have precisely the same number of samples to generate
         // since all the channels are assumed to be driven by the same sample clock of the device.
@@ -285,7 +285,7 @@ where
             self.chans()
                 .iter()
                 .filter(|(_chan_name, chan)| !chan.compile_cache_ends().is_empty())
-                .map(|(chan_name, chan)| (chan_name.to_string(), chan.total_samps()))
+                .map(|(chan_name, chan)| (chan_name.to_string(), chan.compiled_stop_pos()))
                 .collect();
 
         if samps_per_chan.is_empty() {
@@ -316,8 +316,8 @@ where
     ///
     /// # Returns
     /// A `f64` representing the maximum stop time (in seconds) across all compiled channels.
-    fn total_run_time(&self) -> f64 {
-        self.total_samps() as f64 * self.clk_period()
+    fn compiled_stop_time(&self) -> f64 {
+        self.compiled_stop_pos() as f64 * self.clk_period()
     }
 
     fn last_instr_end_pos(&self) -> usize {
@@ -379,8 +379,8 @@ where
             return Err(format!("calc_samps(): requested start_pos={start_pos} and end_pos={end_pos} are invalid - end_pos must be no less than start_pos + 1"))
         }
 
-        if !(end_pos <= self.total_samps()) {
-            return Err(format!("calc_samps(): requested end_pos={end_pos} exceeds the compiled stop position {}", self.total_samps()))
+        if !(end_pos <= self.compiled_stop_pos()) {
+            return Err(format!("calc_samps(): requested end_pos={end_pos} exceeds the compiled stop position {}", self.compiled_stop_pos()))
         }
 
         let n_chans = self.compiled_chans().len();

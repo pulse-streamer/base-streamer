@@ -48,8 +48,8 @@ where
 
     fn total_run_time(&self) -> f64 {
         self.devs().values().map(|typed_dev| match typed_dev {
-            TypedDev::AO(dev) => dev.total_run_time(),
-            TypedDev::DO(dev) => dev.total_run_time(),
+            TypedDev::AO(dev) => dev.compiled_stop_time(),
+            TypedDev::DO(dev) => dev.compiled_stop_time(),
         }).fold(0.0, f64::max)
     }
 

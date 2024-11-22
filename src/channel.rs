@@ -64,7 +64,6 @@
 //! channels are non-editable yet streamable.
 
 use std::collections::BTreeSet;
-use std::cmp::Ordering;
 use std::fmt::{Debug, Formatter};
 
 use ndarray::Array1;
@@ -272,7 +271,7 @@ where T: Clone + Debug + Send + Sync + 'static
         }
         // Verify transfer correctness
         assert_eq!(self.compile_cache_fns().len(), self.compile_cache_ends().len());
-        assert_eq!(self.total_samps(), stop_pos);
+        assert_eq!(self.compiled_stop_pos(), stop_pos);
 
         *self.fresh_compiled_mut() = true;
         Ok(())
@@ -299,15 +298,15 @@ where T: Clone + Debug + Send + Sync + 'static
     ///
     /// If the channel is not compiled, it returns `0`. Otherwise, it retrieves the last end position
     /// from the compiled cache.
-    fn total_samps(&self) -> usize {
+    fn compiled_stop_pos(&self) -> usize {
         match self.compile_cache_ends().last() {
             Some(&end_pos) => end_pos,
             None => 0
         }
     }
     /// Same as [`total_samps`] but the result is multiplied by sample clock period.
-    fn total_run_time(&self) -> f64 {
-        self.total_samps() as f64 * self.clk_period()
+    fn compiled_stop_time(&self) -> f64 {
+        self.compiled_stop_pos() as f64 * self.clk_period()
     }
 
     /// Returns the effective `end_pos` of the last instruction.
@@ -508,53 +507,6 @@ where T: Clone + Debug + Send + Sync + 'static
         Ok(())
     }
 
-    /// Returns the index of the instruction which is intersected by x_pos.
-    ///
-    /// x_pos "intersects" instruction with instr_start_pos and instr_end_pos when
-    ///     instr_start_pos <= x_pos < instr_end_pos
-    ///
-    /// If x_pos = self.total_samps() (that is, points at the end_pos of the last instruction),
-    /// the index of the last instruction is returned.
-    ///
-    /// ### Provable convergence guarantees
-    /// One can prove that at every iteration of the loop:
-    /// * low_idx is strictly lower than high_idx (and once they become equal, we immediately break out)
-    /// * distance between low_idx and high_idx reduces by at least 1
-    /// This is why the search is guaranteed to converge in at most (high_idx - low_idx) iterations.
-    /// This algorithm is also robust against "slips by 1" in mid_idx due to floor() and rounding errors.
-    fn binfind_intersect_instr(&self, x_pos: usize) -> Result<usize, String> {
-        // Assertions (avoid launching panics and return errors instead):
-        if self.compile_cache_ends().is_empty() {
-            return Err(format!(
-                "[chan {}] binary find called with empty compile cache", self.name()
-            ))
-        }
-        if !(x_pos <= self.total_samps()) {
-            return Err(format!(
-                "[chan {}] binary find: requested x_pos {x_pos} exceeds last end_pos {}",
-                self.name(), self.total_samps()
-            ))
-        }
-
-        let mut low_idx = 0;
-        let mut high_idx = self.compile_cache_ends().len() - 1;
-
-        loop {
-            if low_idx == high_idx {
-                break
-            }
-            let mid_idx = ((low_idx + high_idx) as f64 / 2.0).floor() as usize;
-            let mid_end_pos = self.compile_cache_ends()[mid_idx];
-
-            match x_pos.cmp(&mid_end_pos) {
-                Ordering::Less => high_idx = mid_idx,
-                Ordering::Greater => low_idx = mid_idx + 1,
-                Ordering::Equal => return Ok(mid_idx + 1)
-            };
-        }
-        Ok(low_idx)
-    }
-
     /// Argument `t_arr` is redundant
     /// (it can already be calculated knowing `start_pos`, `res_arr.len()`, and `self.samp_rate()`)
     /// but we require it for efficiency reason - the calling `BaseDev` calculates the `t_arr` once
@@ -574,38 +526,40 @@ where T: Clone + Debug + Send + Sync + 'static
             ))
         }
         // Window boundaries, start_pos is included and end_pos is not included:
-        let w_start_pos = start_pos;
-        let w_end_pos = w_start_pos + res_arr.len();
-        if w_end_pos > self.total_samps() {
+        let window_start = start_pos;
+        let window_end = window_start + res_arr.len();
+        if window_end > self.compiled_stop_pos() {
             return Err(format!(
-                "[Chan {}] fill_samps: Requested window end position \n\
-                \t w_start_pos + res_arr.len() = {w_start_pos} + {} = {w_end_pos} \n\
-                exceeds the compile cache end_pos {}",
-                self.name(), res_arr.len(), self.total_samps()
+                "[Chan {}] fill_samps(): Requested window end position \n\
+                \t start_pos + res_arr.len() = {start_pos} + {} = {window_end} \n\
+                goes beyond the compiled stop position {}",
+                self.name(), res_arr.len(), self.compiled_stop_pos()
             ))
         }
 
+        if res_arr.len() == 0 {
+            return Ok(())
+        }
+
         // Find all instructions covered (fully or partially) by this window
-        let first_instr_idx = self.binfind_intersect_instr(w_start_pos)?;
-        let last_instr_idx = self.binfind_intersect_instr(w_end_pos)?;
+        let first_instr_idx = match self.compile_cache_ends().binary_search(&window_start) {
+            Ok(idx) => idx + 1,
+            Err(idx) => idx,
+        };
+        let last_instr_idx = match self.compile_cache_ends().binary_search(&window_end) {
+            Ok(idx) => idx,
+            Err(idx) => idx,
+        };
 
-        // Helper to map "absolute" clock grid position onto the appropriate t/res_arr index - subtract window start_pos
-        let rm_offs = |pos| {pos - w_start_pos};
+        // Helper to map "absolute" clock grid position onto the appropriate t/res_arr index - subtract window start position
+        let rm_offs = |pos| { pos - window_start };
 
-        let mut cur_pos = w_start_pos;
+        let mut cur_pos = window_start;
         for idx in first_instr_idx..=last_instr_idx {
-            /* last_instr_idx is included
-            Special case note:
-                if there is an instruction with start_pos = window_end_pos,
-                it is not covered by that window but will technically be included as last_instr_idx.
-                But since it will have next_pos=cur_pos=window_end_pos, the slice will have zero length
-                and ndarray::zip_with_mut() will simply skips this iteration without mutating res_arr.
-            */
-
-            let instr_end_pos = self.compile_cache_ends()[idx];
+            let instr_end = self.compile_cache_ends()[idx];
             let instr_func = &self.compile_cache_fns()[idx];
 
-            let next_pos = std::cmp::min(instr_end_pos, w_end_pos);
+            let next_pos = std::cmp::min(instr_end, window_end);
             instr_func.calc(
                 &t_arr[rm_offs(cur_pos)..rm_offs(next_pos)],
                 &mut res_arr[rm_offs(cur_pos)..rm_offs(next_pos)]
@@ -632,16 +586,16 @@ where T: Clone + Debug + Send + Sync + 'static
         };
         let end_time = match end_time {
             Some(end_time) => {
-                if end_time > self.total_run_time() {
+                if end_time > self.compiled_stop_time() {
                     return Err(format!(
-                        "[Chan {}] requested end_time {end_time} exceeds total_run_time {}. \
-                        If you intended to specify end_time = total_run_time, use end_time = None",
-                        self.name(), self.total_run_time()
+                        "[Chan {}] requested end_time {end_time} exceeds compiled_stop_time {}. \
+                        If you intended to specify end_time = compiled_stop_time, use end_time = None",
+                        self.name(), self.compiled_stop_time()
                     ))
                 }
                 end_time
             },
-            None => self.total_run_time()
+            None => self.compiled_stop_time()
         };
         if end_time < start_time {
             return Err(format!(
@@ -650,10 +604,10 @@ where T: Clone + Debug + Send + Sync + 'static
             ))
         }
 
+        let mut res_arr = vec![self.dflt_val(); n_samps];
+        // Using ndarray::Array1::linspace to initialize t_arr (benchmarks showed it was faster than anything we tried with Vec<f64>)
         let t_arr = Array1::linspace(start_time, end_time, n_samps);
-        let mut res_arr = Array1::from_elem(n_samps, self.dflt_val());
         let t_arr_slice = t_arr.as_slice().expect("[BaseChan::calc_nsamps()] BUG: t_arr.as_slice() returned None");
-        let res_arr_slice = res_arr.as_slice_mut().expect("[BaseChan::calc_nsamps()] BUG: res_arr.as_slice_mut() returned None");
 
         // We use the "absolute" position on the underlying sample clock grid
         // to determine which instructions overlap with the start_time-end_time window
@@ -663,36 +617,42 @@ where T: Clone + Debug + Send + Sync + 'static
         // which generally fall somewhere between sample clock ticks.
 
         // "Absolute" window boundaries
-        let w_start_pos = (start_time * self.samp_rate()).round() as usize;
-        let w_end_pos = (end_time * self.samp_rate()).round() as usize;
+        let window_start = (start_time * self.samp_rate()).round() as usize;
+        let window_end = (end_time * self.samp_rate()).round() as usize;
 
-        // Find all instructions overlapping with this window
-        let first_instr_idx = self.binfind_intersect_instr(w_start_pos)?;
-        let last_instr_idx = self.binfind_intersect_instr(w_end_pos)?;
+        // Find all instructions covered (fully or partially) by this window
+        let first_instr_idx = match self.compile_cache_ends().binary_search(&window_start) {
+            Ok(idx) => idx + 1,
+            Err(idx) => idx,
+        };
+        let last_instr_idx = match self.compile_cache_ends().binary_search(&window_end) {
+            Ok(idx) => idx,
+            Err(idx) => idx,
+        };
 
         // Below is the helper function to map the "absolute" position onto the t/res_arr indexes:
-        //      linear function: w_start_pos |-> 0, w_end_pos |-> n_samps
+        //      linear function: window_start |-> 0, window_end |-> n_samps
         let cvt_pos = |pos| {
-            let frac = (pos - w_start_pos) as f64 / (w_end_pos - w_start_pos) as f64;
+            let frac = (pos - window_start) as f64 / (window_end - window_start) as f64;
             (n_samps as f64 * frac).round() as usize
         };
 
         // Jump over absolute end_positions of all covered instructions
-        // to sweep the full range from w_start_pos to w_end_pos.
+        // to sweep the full range from window_start to window_end.
         // That in turn will sweep the full index range from 0 to n_samps of t_arr and res_arr.
-        let mut cur_pos = w_start_pos;
+        let mut cur_pos = window_start;
         for idx in first_instr_idx..=last_instr_idx {
-            let instr_end_pos = self.compile_cache_ends()[idx];
+            let instr_end = self.compile_cache_ends()[idx];
             let instr_func = &self.compile_cache_fns()[idx];
 
-            let next_pos = std::cmp::min(instr_end_pos, w_end_pos);
+            let next_pos = std::cmp::min(instr_end, window_end);
             instr_func.calc(
                 &t_arr_slice[cvt_pos(cur_pos)..cvt_pos(next_pos)],
-                &mut res_arr_slice[cvt_pos(cur_pos)..cvt_pos(next_pos)]
+                &mut res_arr[cvt_pos(cur_pos)..cvt_pos(next_pos)]
             );
             cur_pos = next_pos;
         };
-        Ok(res_arr.to_vec())
+        Ok(res_arr)
     }
 }
 
