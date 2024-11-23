@@ -657,116 +657,90 @@ where T: Clone + Debug + Send + Sync + 'static
 }
 
 // ==================== Unit tests ====================
+// ToDo - tests are outdated
 #[cfg(test)]
 mod test {
     /*
-    /// Represents a physical channel on an NI device.
-    ///
-    /// `Channel` provides a concrete implementation of the [`BaseChannel`] trait, offering
-    /// straightforward and direct methods to interact with the NI device channels. Each instance of
-    /// `Channel` corresponds to a physical channel on an NI device, characterized by its `name`.
-    ///
-    /// The `Channel` struct ensures that any interactions with the NI devices are consistent with the
-    /// requirements and behaviors defined by the [`BaseChannel`] trait.
-    ///
-    /// # Fields
-    /// - `samp_rate`: The sampling rate of the channel, determining how often the channel updates.
-    /// - `task_type`: Specifies the type of task associated with this channel.
-    /// - `fresh_compiled`: A boolean indicating whether the channel's compiled results are up-to-date with the edit cache.
-    /// - `name`: A string representation of the channel's identifier as recognized by the NI driver.
-    /// - `instr_list`: The edit-cache for the channel. Maintains a sorted list of instruction books.
-    /// - `instr_end`: Stores the ending points of compiled instructions.
-    /// - `instr_val`: Holds the values of the compiled instructions.
-    pub struct Channel {
-        samp_rate: f64,
-        fresh_compiled: bool,
-        task_type: TaskType,
+    use std::collections::BTreeSet;
+    use crate::fn_lib_tools::FnTraitSet;
+    use crate::channel::{BaseChan, ConstFn};
+    use crate::instruction::Instr;
+
+    pub struct TestChan {
         name: String,
-        default_value: f64,
-        instr_list: BTreeSet<InstrBook>,
-        instr_end: Vec<usize>,
-        instr_val: Vec<Instr>,
+        samp_rate: f64,
+        dflt_val: f64,
+        rst_val: f64,
+        instr_list: BTreeSet<Instr<f64>>,
+        compile_cache_ends: Vec<usize>,
+        compile_cache_fns: Vec<Box<dyn FnTraitSet<f64>>>,
+        is_fresh_compiled: bool,
     }
 
-    impl BaseChan for Channel {
-        fn samp_rate(&self) -> f64 {
-            self.samp_rate
-        }
-        fn is_fresh_compiled(&self) -> bool {
-            self.fresh_compiled
-        }
-        fn name(&self) -> &str {
-            &self.name
-        }
-        fn dflt_val(&self) -> f64 {
-            self.default_value
-        }
-        fn reset_val(&self) -> f64 {
-            0.0
-        }
-        fn instr_list(&self) -> &BTreeSet<InstrBook> {
-            &self.instr_list
-        }
-        fn instr_end(&self) -> &Vec<usize> {
-            &self.instr_end
-        }
-        fn instr_fn(&self) -> &Vec<Instr> {
-            &self.instr_val
-        }
-        fn instr_list_mut(&mut self) -> &mut BTreeSet<InstrBook> {
-            &mut self.instr_list
-        }
-        fn instr_end_mut(&mut self) -> &mut Vec<usize> {
-            &mut self.instr_end
-        }
-        fn instr_fn_mut(&mut self) -> &mut Vec<Instr> {
-            &mut self.instr_val
-        }
-        fn fresh_compiled_mut(&mut self) -> &mut bool {
-            &mut self.fresh_compiled
-        }
-        fn task_type(&self) -> TaskType {
-            self.task_type
-        }
-    }
-
-    impl Channel {
-        /// Constructs a new `Channel` instance.
-        ///
-        /// Creates a new channel with the specified task type, physical name, and sampling rate.
-        ///
-        /// # Arguments
-        /// * `task_type`: Specifies the type of task associated with this channel.
-        ///    It can be either `AO` (analogue output) or `DO` (digital output).
-        /// * `name`: The string representation of the channel's identifier as recognized by the NI driver.
-        /// * `samp_rate`: The sampling rate for the channel, determining how often the channel updates.
-        ///
-        /// # Returns
-        ///
-        /// Returns a new instance of `Channel` initialized with the provided arguments.
-        ///
-        /// # Example
-        ///
-        /// ```
-        /// # use nicompiler_backend::channel::*;
-        /// let do_channel = Channel::new(TaskType::DO, "port0/line0", 1e7, 0.);
-        /// let ao_channel = Channel::new(TaskType::AO, "ao0", 1e6, 0.);
-        /// ```
-        ///
-        pub fn new(task_type: TaskType, name: &str, samp_rate: f64, default_value: f64) -> Self {
+    impl TestChan {
+        pub fn new(name: &str, samp_rate: f64, dflt_val: f64) -> Self {
             Self {
-                samp_rate,
-                task_type,
-                fresh_compiled: true,
                 name: name.to_string(),
-                default_value: default_value,
+                samp_rate,
+                dflt_val,
+                rst_val: dflt_val,
                 instr_list: BTreeSet::new(),
-                instr_end: Vec::new(),
-                instr_val: Vec::new(),
+                compile_cache_ends: Vec::new(),
+                compile_cache_fns: Vec::new(),
+                is_fresh_compiled: true,
             }
         }
     }
-     */
+
+    impl BaseChan<f64> for TestChan {
+        fn name(&self) -> String {
+            self.name.clone()
+        }
+
+        fn samp_rate(&self) -> f64 {
+            self.samp_rate
+        }
+
+        fn is_fresh_compiled(&self) -> bool {
+            self.is_fresh_compiled
+        }
+
+        fn dflt_val(&self) -> f64 {
+            self.dflt_val
+        }
+
+        fn rst_val(&self) -> f64 {
+            self.rst_val
+        }
+
+        fn instr_list(&self) -> &BTreeSet<Instr<f64>> {
+            &self.instr_list
+        }
+
+        fn compile_cache_ends(&self) -> &Vec<usize> {
+            &self.compile_cache_ends
+        }
+
+        fn compile_cache_fns(&self) -> &Vec<Box<dyn FnTraitSet<f64>>> {
+            &self.compile_cache_fns
+        }
+
+        fn fresh_compiled_mut(&mut self) -> &mut bool {
+            &mut self.is_fresh_compiled
+        }
+
+        fn instr_list_mut(&mut self) -> &mut BTreeSet<Instr<f64>> {
+            &mut self.instr_list
+        }
+
+        fn compile_cache_ends_mut(&mut self) -> &mut Vec<usize> {
+            &mut self.compile_cache_ends
+        }
+
+        fn compile_cache_fns_mut(&mut self) -> &mut Vec<Box<dyn FnTraitSet<f64>>> {
+            &mut self.compile_cache_fns
+        }
+    } */
 
     mod add_instr {
         use crate::instruction::*;
