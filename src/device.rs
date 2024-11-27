@@ -320,11 +320,11 @@ where
         self.compiled_stop_pos() as f64 * self.clk_period()
     }
 
-    fn last_instr_end_pos(&self) -> usize {
+    fn last_instr_end_pos(&self) -> Option<usize> {
         self.chans()
             .values()
-            .map(|chan| chan.last_instr_end_pos())
-            .fold(0, usize::max)
+            .filter_map(|chan| chan.last_instr_end_pos())
+            .reduce(|largest_so_far, end_pos| std::cmp::max(largest_so_far, end_pos))
     }
     /// Calculates the maximum stop time among all editable channels and optionally adds an extra tick duration.
     ///
@@ -337,8 +337,11 @@ where
     /// # Returns
     /// A `f64` representing the maximum stop time (in seconds) across all editable channels, 
     /// optionally increased by the duration of one tick.
-    fn last_instr_end_time(&self) -> f64 {
-        self.last_instr_end_pos() as f64 * self.clk_period()
+    fn last_instr_end_time(&self) -> Option<f64> {
+        match self.last_instr_end_pos() {
+            Some(end_pos) => Some(end_pos as f64 * self.clk_period()),
+            None => None,
+        }
     }
 
     /// Computes and returns the signal values for specified channels in a device.
