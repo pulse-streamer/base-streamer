@@ -128,13 +128,16 @@ where
 
     fn add_reset_instr(&mut self, reset_time: f64) -> Result<(), String> {
         let reset_pos = (reset_time * self.samp_rate()).round() as usize;
-        if reset_pos < self.last_instr_end_pos() {
+
+        // Sanity check - reset_pos does not clip any existing instructions
+        if self.last_instr_end_pos().is_some_and(|last_instr_end| reset_pos < last_instr_end) {
             return Err(format!(
                 "[Device {}] given reset_time {reset_time} was rounded to {reset_pos} clock cycles \
-                which is below the last instruction end_pos {}",
-                self.name(), self.last_instr_end_pos()
+                which is below the last instruction end position {}",
+                self.name(), self.last_instr_end_pos().unwrap()
             ))
         }
+
         for chan in self.chans_mut().values_mut() {
             chan.add_reset_instr(reset_pos)?
         };
@@ -176,18 +179,14 @@ where
     }
 
     fn check_end_clipped(&self, stop_tick: usize) -> bool {
-        if stop_tick < self.last_instr_end_pos() {
-            panic!("Given stop_tick {stop_tick} is below the last instruction end_pos {}",
-                   self.last_instr_end_pos())
-        }
         self.chans()
             .values()
-            .filter(|chan| !chan.instr_list().is_empty())
-            .any(|chan| {
-                let last_instr = chan.instr_list().last().unwrap();
-                match last_instr.end_pos() {
-                    Some(end_pos) => end_pos == stop_tick,
-                    None => false
+            .filter_map(|chan| chan.instr_list().last())
+            .any(|last_instr| {
+                if last_instr.dur().is_some() {
+                    stop_tick <= last_instr.end_pos().unwrap()
+                } else {
+                    stop_tick <= last_instr.start_pos()
                 }
             })
     }
@@ -211,13 +210,16 @@ where
     ///
     /// # Arguments
     /// - `stop_time`: The stop time used to compile the channels.
-    fn compile_base(&mut self, stop_time: f64) -> Result<f64, String> {
+    fn compile_base(&mut self, stop_time: f64) -> Result<Option<f64>, String> {
+        if !self.is_edited() {
+            Ok(None)
+        }
         let stop_tick = (stop_time * self.samp_rate()).round() as usize;
-        if stop_tick < self.last_instr_end_pos() {
+        if stop_tick < self.last_instr_end_pos().unwrap() {
             return Err(format!(
                 "[Device {}] requested stop_time {stop_time} was rounded to {stop_tick} clock cycles \
                 which is below the last instruction end_pos {}",
-                self.name(), self.last_instr_end_pos()
+                self.name(), self.last_instr_end_pos().unwrap()
             ))
         }
 
@@ -246,7 +248,8 @@ where
         };
 
         // Return the total run duration to generate all the samples:
-        Ok(self.compiled_stop_time())
+        let compiled_stop_time = self.compiled_stop_time()?;
+        Ok(compiled_stop_time)
     }
 
     fn compile(&mut self, stop_time: f64) -> Result<f64, String> {
@@ -272,7 +275,7 @@ where
     }
 
     /// Returns the total number of samples the card will generate according to the current compile cache.
-    fn compiled_stop_pos(&self) -> usize {
+    fn compiled_stop_pos(&self) -> Result<Option<usize>, String> {
         // The assumption is that all the channels of any given device
         // must have precisely the same number of samples to generate
         // since all the channels are assumed to be driven by the same sample clock of the device.
@@ -280,34 +283,38 @@ where
         // This function first checks `total_samps` are indeed consistent across all compiled channels
         // and then returns the common `total_samps`.
 
-        // Collect `total_samps` from all compiled channels into an `IndexMap`
+        // Collect `compiled_stop_pos` from all compiled channels into an `IndexMap`
         let samps_per_chan: IndexMap<String, usize> =
             self.chans()
                 .iter()
-                .filter(|(_chan_name, chan)| !chan.compile_cache_ends().is_empty())
-                .map(|(chan_name, chan)| (chan_name.to_string(), chan.compiled_stop_pos()))
+                .filter_map(|(chan_name, chan)| {
+                    match chan.compiled_stop_pos() {
+                        Some(stop_pos) => Some((chan_name, stop_pos)),
+                        None => None,  // this channel was not compiled - filter it out
+                    }
+                })
                 .collect();
 
         if samps_per_chan.is_empty() {
-            return 0
+            Ok(None)
         } else {
             // To verify consistency, compare all against the first one:
             let &first_val = samps_per_chan.values().next().unwrap();
             let all_equal = samps_per_chan.values().all(|&stop_pos| stop_pos == first_val);
             if all_equal {
-                return first_val
+                Ok(Some(first_val))
             } else {
-                panic!(
+                Err(format!(
                     "Channels of device {} have unequal compiled stop positions:\n\
                     {:?}\n\
                     When working at a device level, you are not supposed to compile individual channels directly. \
                     Instead, call `my_device.compile(stop_pos)` and it will compile all channels with the same `stop_pos`",
                     self.name(), samps_per_chan
-                )
+                ))
             }
         }
-
     }
+
     /// Calculates the maximum stop time among all compiled channels.
     ///
     /// Iterates over all the compiled channels in the device, regardless of their streamability or
@@ -316,15 +323,22 @@ where
     ///
     /// # Returns
     /// A `f64` representing the maximum stop time (in seconds) across all compiled channels.
-    fn compiled_stop_time(&self) -> f64 {
-        self.compiled_stop_pos() as f64 * self.clk_period()
+    fn compiled_stop_time(&self) -> Result<Option<f64>, String> {
+        let compiled_stop_pos = self.compiled_stop_pos()?;
+        let compiled_stop_time = match compiled_stop_pos {
+            Some(stop_pos) => Some(stop_pos as f64 * self.clk_period()),
+            None => None,
+        };
+        Ok(compiled_stop_time)
     }
 
     fn last_instr_end_pos(&self) -> Option<usize> {
         self.chans()
             .values()
             .filter_map(|chan| chan.last_instr_end_pos())
-            .reduce(|largest_so_far, end_pos| std::cmp::max(largest_so_far, end_pos))
+            .reduce(
+                |largest_so_far, this_end_pos| std::cmp::max(largest_so_far, this_end_pos)
+            )
     }
     /// Calculates the maximum stop time among all editable channels and optionally adds an extra tick duration.
     ///

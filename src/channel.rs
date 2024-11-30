@@ -193,10 +193,10 @@ where T: Clone + Debug + Send + Sync + 'static
         if self.instr_list().is_empty() {
             return Ok(())
         }
-        if stop_pos < self.last_instr_end_pos() {
+        if stop_pos < self.last_instr_end_pos().unwrap() {
             return Err(format!(
                 "[Channel {}] Attempting to compile with stop_pos {} while instructions end at {}",
-                self.name(), stop_pos, self.last_instr_end_pos()
+                self.name(), stop_pos, self.last_instr_end_pos().unwrap()
             ))
 
         }
@@ -271,7 +271,7 @@ where T: Clone + Debug + Send + Sync + 'static
         }
         // Verify transfer correctness
         assert_eq!(self.compile_cache_fns().len(), self.compile_cache_ends().len());
-        assert_eq!(self.compiled_stop_pos(), stop_pos);
+        assert_eq!(self.compiled_stop_pos().unwrap(), stop_pos);
 
         *self.fresh_compiled_mut() = true;
         Ok(())
@@ -296,7 +296,7 @@ where T: Clone + Debug + Send + Sync + 'static
 
     /// Returns the stop position of the compiled instructions.
     ///
-    /// If the channel is not compiled, it returns `0`. Otherwise, it retrieves the last end position
+    /// If the channel is not compiled, it returns `None`. Otherwise, it retrieves the last end position
     /// from the compiled cache.
     fn compiled_stop_pos(&self) -> Option<usize> {
         self.compile_cache_ends()
@@ -496,11 +496,11 @@ where T: Clone + Debug + Send + Sync + 'static
         self.add_instr(Box::new(ConstFn::new(val)), t, dur_spec)
     }
     fn add_reset_instr(&mut self, reset_pos: usize) -> Result<(), String> {
-        if reset_pos < self.last_instr_end_pos() {
+        if self.last_instr_end_pos().is_some_and(|last_instr_end| reset_pos < last_instr_end) {
             return Err(format!(
                 "Requested channel {} to insert reset instruction at reset_pos = {reset_pos} \
                 which is below the last_instr_end_pos = {}",
-                self.name(), self.last_instr_end_pos()
+                self.name(), self.last_instr_end_pos().unwrap()
             ))
         }
         let reset_instr = Instr::new(
@@ -533,12 +533,12 @@ where T: Clone + Debug + Send + Sync + 'static
         // Window boundaries, start_pos is included and end_pos is not included:
         let window_start = start_pos;
         let window_end = window_start + res_arr.len();
-        if window_end > self.compiled_stop_pos() {
+        if window_end > self.compiled_stop_pos().unwrap() {
             return Err(format!(
                 "[Chan {}] fill_samps(): Requested window end position \n\
                 \t start_pos + res_arr.len() = {start_pos} + {} = {window_end} \n\
                 goes beyond the compiled stop position {}",
-                self.name(), res_arr.len(), self.compiled_stop_pos()
+                self.name(), res_arr.len(), self.compiled_stop_pos().unwrap()
             ))
         }
 
@@ -579,7 +579,7 @@ where T: Clone + Debug + Send + Sync + 'static
     /// Typically, users will request n_samps which is smaller than the actual number of clock ticks
     /// between start_time and end_time because otherwise plotting may be extremely slow.
     fn calc_nsamps(&self, n_samps: usize, start_time: Option<f64>, end_time: Option<f64>) -> Result<Vec<T>, String> {
-        if !self.is_compiled() {
+        if !self.is_fresh_compiled() {
             return Err(format!(
                 "[Chan {}] Attempting to calculate signal on not-compiled channel", self.name()
             ))
@@ -591,16 +591,16 @@ where T: Clone + Debug + Send + Sync + 'static
         };
         let end_time = match end_time {
             Some(end_time) => {
-                if end_time > self.compiled_stop_time() {
+                if end_time > self.compiled_stop_time().unwrap() {
                     return Err(format!(
                         "[Chan {}] requested end_time {end_time} exceeds compiled_stop_time {}. \
                         If you intended to specify end_time = compiled_stop_time, use end_time = None",
-                        self.name(), self.compiled_stop_time()
+                        self.name(), self.compiled_stop_time().unwrap()
                     ))
                 }
                 end_time
             },
-            None => self.compiled_stop_time()
+            None => self.compiled_stop_time().unwrap()
         };
         if end_time < start_time {
             return Err(format!(
