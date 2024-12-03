@@ -178,15 +178,17 @@ where
         }
     }
 
-    fn check_end_clipped(&self, stop_tick: usize) -> bool {
+    fn is_closing_edge_clipped(&self, stop_tick: usize) -> bool {
+        if self.last_instr_end_pos().is_some_and(|last_end_pos| stop_tick < last_end_pos) {
+            panic!("Given stop_tick {stop_tick} is below the last instruction end_pos {}", self.last_instr_end_pos().unwrap())
+        }
         self.chans()
             .values()
             .filter_map(|chan| chan.instr_list().last())
             .any(|last_instr| {
-                if last_instr.dur().is_some() {
-                    stop_tick <= last_instr.end_pos().unwrap()
-                } else {
-                    stop_tick <= last_instr.start_pos()
+                match last_instr.end_pos() {
+                    Some(end_pos) => stop_tick == end_pos,
+                    None => false,
                 }
             })
     }
@@ -236,7 +238,7 @@ where
         // we explicitly ask the card to run for one more clock cycle longer and generate the extra sample at the end.
         // Channel's `compile()` logic will fill this sample with the last instruction's after-end padding
         // thus reliably forming its' "closing edge".
-        let stop_pos = if self.check_end_clipped(stop_tick) {
+        let stop_pos = if self.is_closing_edge_clipped(stop_tick) {
             stop_tick + 1
         } else {
             stop_tick
