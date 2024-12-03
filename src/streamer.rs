@@ -37,20 +37,28 @@ where
         Ok(())
     }
 
-    fn last_instr_end_time(&self) -> f64 {
-        self.devs().values().map(|typed_dev| {
-            match typed_dev {
+    fn last_instr_end_time(&self) -> Option<f64> {
+        self.devs()
+            .values()
+            .filter_map(|typed_dev| match typed_dev {
                 TypedDev::AO(dev) => dev.last_instr_end_time(),
                 TypedDev::DO(dev) => dev.last_instr_end_time(),
-            }
-        }).fold(0.0, f64::max)
+            })
+            .reduce(
+                |largest_so_far, this_end_time| std::cmp::max(largest_so_far, this_end_time)
+            )
     }
 
-    fn total_run_time(&self) -> f64 {
-        self.devs().values().map(|typed_dev| match typed_dev {
-            TypedDev::AO(dev) => dev.compiled_stop_time(),
-            TypedDev::DO(dev) => dev.compiled_stop_time(),
-        }).fold(0.0, f64::max)
+    fn total_run_time(&self) -> Option<f64> {
+        self.devs()
+            .values()
+            .filter_map(|typed_dev| match typed_dev {
+                TypedDev::AO(dev) => dev.compiled_stop_time(),
+                TypedDev::DO(dev) => dev.compiled_stop_time(),
+            })
+            .reduce(
+                |shortest_so_far, this_stop_time| std::cmp::min(shortest_so_far, this_stop_time)
+            )
     }
 
     fn got_instructions(&self) -> bool {
@@ -86,19 +94,22 @@ where
             )
     }
 
-    fn compile(&mut self, stop_time: Option<f64>) -> Result<f64, String> {
+    fn compile(&mut self, stop_time: Option<f64>) -> Result<Option<f64>, String> {
+        if !self.got_instructions() {
+            return Ok(None)
+        }
         let stop_time = match stop_time {
             Some(stop_time) => {
-                if stop_time < self.last_instr_end_time() {
+                if stop_time < self.last_instr_end_time().unwrap() {
                     return Err(format!(
                         "Attempted to compile with stop_time={stop_time} [s] while the last instruction end time is {} [s]\n\
                         If you intended to provide stop_time=last_instr_end_time, use stop_time=None",
-                        self.last_instr_end_time()
+                        self.last_instr_end_time().unwrap()
                     ))
                 };
                 stop_time
             },
-            None => self.last_instr_end_time(),
+            None => self.last_instr_end_time().unwrap(),
         };
 
         for typed_dev in self.devs_mut().values_mut() {
@@ -137,19 +148,19 @@ where
     }
 
     fn add_reset_instr(&mut self, reset_time: Option<f64>) -> Result<(), String> {
-        let last_instr_end_time = self.last_instr_end_time();
         let reset_time = match reset_time {
             Some(reset_time) => {
-                if reset_time < last_instr_end_time {
+                if last_instr_end_time.is_some_and(|last_instr_end| reset_time < last_instr_end){
                     return Err(format!(
                         "Requested to insert the all-channel reset instruction at t = {reset_time} [s] \
-                        but some channels have instructions spanning until {last_instr_end_time} [s].\n\
-                        If you intended to provide `reset_time=last_instr_end_time`, use `reset_time=None`"
+                        but some channels have instructions spanning until {} [s].\n\
+                        If you intended to provide `reset_time=last_instr_end_time`, use `reset_time=None`",
+                        self.last_instr_end_time().unwrap()
                     ))
                 }
                 reset_time
             },
-            None => last_instr_end_time
+            None => self.last_instr_end_time().unwrap_or(0.0),
         };
         for typed_dev in self.devs_mut().values_mut() {
             match typed_dev {

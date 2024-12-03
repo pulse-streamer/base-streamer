@@ -250,11 +250,10 @@ where
         };
 
         // Return the total run duration to generate all the samples:
-        let compiled_stop_time = self.compiled_stop_time()?;
-        Ok(compiled_stop_time)
+        Ok(self.compiled_stop_time())
     }
 
-    fn compile(&mut self, stop_time: f64) -> Result<f64, String> {
+    fn compile(&mut self, stop_time: f64) -> Result<Option<f64>, String> {
         self.compile_base(stop_time)
     }
 
@@ -277,7 +276,7 @@ where
     }
 
     /// Returns the total number of samples the card will generate according to the current compile cache.
-    fn compiled_stop_pos(&self) -> Result<Option<usize>, String> {
+    fn compiled_stop_pos(&self) -> Option<usize> {
         // The assumption is that all the channels of any given device
         // must have precisely the same number of samples to generate
         // since all the channels are assumed to be driven by the same sample clock of the device.
@@ -286,7 +285,7 @@ where
         // and then returns the common `total_samps`.
 
         // Collect `compiled_stop_pos` from all compiled channels into an `IndexMap`
-        let samps_per_chan: IndexMap<String, usize> =
+        let chan_stop_pos_map: IndexMap<String, usize> =
             self.chans()
                 .iter()
                 .filter_map(|(chan_name, chan)| {
@@ -297,22 +296,22 @@ where
                 })
                 .collect();
 
-        if samps_per_chan.is_empty() {
-            Ok(None)
+        if chan_stop_pos_map.is_empty() {
+            None
         } else {
             // To verify consistency, compare all against the first one:
-            let &first_val = samps_per_chan.values().next().unwrap();
-            let all_equal = samps_per_chan.values().all(|&stop_pos| stop_pos == first_val);
+            let &first_val = chan_stop_pos_map.values().next().unwrap();
+            let all_equal = chan_stop_pos_map.values().all(|&stop_pos| stop_pos == first_val);
             if all_equal {
-                Ok(Some(first_val))
+                Some(first_val)
             } else {
-                Err(format!(
+                panic!(
                     "Channels of device {} have unequal compiled stop positions:\n\
                     {:?}\n\
                     When working at a device level, you are not supposed to compile individual channels directly. \
                     Instead, call `my_device.compile(stop_pos)` and it will compile all channels with the same `stop_pos`",
-                    self.name(), samps_per_chan
-                ))
+                    self.name(), chan_stop_pos_map
+                )
             }
         }
     }
@@ -325,13 +324,11 @@ where
     ///
     /// # Returns
     /// A `f64` representing the maximum stop time (in seconds) across all compiled channels.
-    fn compiled_stop_time(&self) -> Result<Option<f64>, String> {
-        let compiled_stop_pos = self.compiled_stop_pos()?;
-        let compiled_stop_time = match compiled_stop_pos {
+    fn compiled_stop_time(&self) -> Option<f64> {
+        match self.compiled_stop_pos() {
             Some(stop_pos) => Some(stop_pos as f64 * self.clk_period()),
             None => None,
-        };
-        Ok(compiled_stop_time)
+        }
     }
 
     fn last_instr_end_pos(&self) -> Option<usize> {
@@ -342,6 +339,7 @@ where
                 |largest_so_far, this_end_pos| std::cmp::max(largest_so_far, this_end_pos)
             )
     }
+
     /// Calculates the maximum stop time among all editable channels and optionally adds an extra tick duration.
     ///
     /// This function determines the maximum stop time by iterating over all editable channels. 
