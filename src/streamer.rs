@@ -53,13 +53,13 @@ where
         }).fold(0.0, f64::max)
     }
 
-    fn is_edited(&self) -> bool {
+    fn got_instructions(&self) -> bool {
         self.devs()
             .values()
             .any(
                 |typed_dev| match typed_dev {
-                    TypedDev::AO(dev) => dev.is_edited(),
-                    TypedDev::DO(dev) => dev.is_edited(),
+                    TypedDev::AO(dev) => dev.got_instructions(),
+                    TypedDev::DO(dev) => dev.got_instructions(),
                 }
             )
     }

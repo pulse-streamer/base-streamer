@@ -149,7 +149,7 @@ where T: Clone + Debug + Send + Sync + 'static
         !self.compile_cache_ends().is_empty()
     }
     /// Channel is marked as edited if its edit-cache field `instr_list` is nonempty
-    fn is_edited(&self) -> bool {
+    fn got_instructions(&self) -> bool {
         !self.instr_list().is_empty()
     }
 

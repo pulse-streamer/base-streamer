@@ -155,8 +155,8 @@ where
     }
     /// A device is marked edited if any of its editable channels are edited.
     /// Also see [`BaseChannel::is_edited`]
-    fn is_edited(&self) -> bool {
-        self.chans().values().any(|chan| chan.is_edited())
+    fn got_instructions(&self) -> bool {
+        self.chans().values().any(|chan| chan.got_instructions())
     }
     /// A device is marked fresh-compiled if all if its editable channels are freshly compiled.
     /// Also see [`BaseChannel::is_fresh_compiled`]
@@ -211,8 +211,8 @@ where
     /// # Arguments
     /// - `stop_time`: The stop time used to compile the channels.
     fn compile_base(&mut self, stop_time: f64) -> Result<Option<f64>, String> {
-        if !self.is_edited() {
-            Ok(None)
+        if !self.got_instructions() {
+            return Ok(None)
         }
         let stop_tick = (stop_time * self.samp_rate()).round() as usize;
         if stop_tick < self.last_instr_end_pos().unwrap() {
