@@ -305,26 +305,17 @@ where T: Clone + Debug + Send + Sync + 'static
     }
     /// Same as [`total_samps`] but the result is multiplied by sample clock period.
     fn compiled_stop_time(&self) -> Option<f64> {
-        match self.compiled_stop_pos() {
-            Some(stop_pos) => Some(stop_pos as f64 * self.clk_period()),
-            None => None,
-        }
+        self.compiled_stop_pos().map(|stop_pos| stop_pos as f64 * self.clk_period())
     }
 
     /// Returns the effective `end_pos` of the last instruction.
     /// If the edit cache is empty, it returns `0`.
     fn last_instr_end_pos(&self) -> Option<usize> {
-        match self.instr_list().last() {
-            Some(last_instr) => Some(last_instr.eff_end_pos()),
-            None => None,
-        }
+        self.instr_list().last().map(|last_instr| last_instr.eff_end_pos())
     }
     /// Same as [`last_instr_end_pos`] but the result is multiplied by sample clock period.
     fn last_instr_end_time(&self) -> Option<f64> {
-        match self.last_instr_end_pos() {
-            Some(end_pos) => Some(end_pos as f64 * self.clk_period()),
-            None => None,
-        }
+        self.last_instr_end_pos().map(|end_pos| end_pos as f64 * self.clk_period())
     }
 
     /// Adds an instruction to the channel.

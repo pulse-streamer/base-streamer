@@ -325,10 +325,7 @@ where
     /// # Returns
     /// A `f64` representing the maximum stop time (in seconds) across all compiled channels.
     fn compiled_stop_time(&self) -> Option<f64> {
-        match self.compiled_stop_pos() {
-            Some(stop_pos) => Some(stop_pos as f64 * self.clk_period()),
-            None => None,
-        }
+        self.compiled_stop_pos().map(|stop_pos| stop_pos as f64 * self.clk_period())
     }
 
     fn last_instr_end_pos(&self) -> Option<usize> {
@@ -352,10 +349,7 @@ where
     /// A `f64` representing the maximum stop time (in seconds) across all editable channels, 
     /// optionally increased by the duration of one tick.
     fn last_instr_end_time(&self) -> Option<f64> {
-        match self.last_instr_end_pos() {
-            Some(end_pos) => Some(end_pos as f64 * self.clk_period()),
-            None => None,
-        }
+        self.last_instr_end_pos().map(|end_pos| end_pos as f64 * self.clk_period())
     }
 
     /// Computes and returns the signal values for specified channels in a device.
