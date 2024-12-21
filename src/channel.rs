@@ -509,11 +509,11 @@ where T: Clone + Debug + Send + Sync + 'static
     /// and then reuses it for every channel by lending a read-only view.
     fn fill_samps(&self, start_pos: usize, res_arr: &mut [T], t_arr: &[f64]) -> Result<(), String> {
         // Sanity checks (avoid launching panics and return errors instead):
+        if !self.got_instructions() {
+            return Err(format!("[Chan {}] fill_samps(): did not get any instructions", self.name()))
+        }
         if !self.is_fresh_compiled() {
-            return Err(format!(
-                "[Chan {}] fill_samps(): Compile before attempting to calculate samples.",
-                self.name()
-            ))
+            return Err(format!("[Chan {}] fill_samps(): Compile before attempting to calculate samples.", self.name()))
         }
         if res_arr.len() != t_arr.len() {
             return Err(format!(
@@ -570,10 +570,11 @@ where T: Clone + Debug + Send + Sync + 'static
     /// Typically, users will request n_samps which is smaller than the actual number of clock ticks
     /// between start_time and end_time because otherwise plotting may be extremely slow.
     fn calc_nsamps(&self, n_samps: usize, start_time: Option<f64>, end_time: Option<f64>) -> Result<Vec<T>, String> {
+        if !self.got_instructions() {
+            return Err(format!("[Chan {}] fill_samps(): did not get any instructions", self.name()))
+        }
         if !self.is_fresh_compiled() {
-            return Err(format!(
-                "[Chan {}] Attempting to calculate signal on not-compiled channel", self.name()
-            ))
+            return Err(format!("[Chan {}] Attempting to calculate signal on not-compiled channel", self.name()))
         }
 
         let start_time = match start_time {

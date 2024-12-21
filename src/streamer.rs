@@ -45,7 +45,7 @@ where
                 TypedDev::DO(dev) => dev.last_instr_end_time(),
             })
             .reduce(
-                |largest_so_far, this_end_time| std::cmp::max(largest_so_far, this_end_time)
+                |largest_so_far, this_end_time| f64::max(largest_so_far, this_end_time)
             )
     }
 
@@ -57,7 +57,7 @@ where
                 TypedDev::DO(dev) => dev.compiled_stop_time(),
             })
             .reduce(
-                |shortest_so_far, this_stop_time| std::cmp::min(shortest_so_far, this_stop_time)
+                |shortest_so_far, this_stop_time| f64::min(shortest_so_far, this_stop_time)
             )
     }
 
@@ -150,7 +150,7 @@ where
     fn add_reset_instr(&mut self, reset_time: Option<f64>) -> Result<(), String> {
         let reset_time = match reset_time {
             Some(reset_time) => {
-                if last_instr_end_time.is_some_and(|last_instr_end| reset_time < last_instr_end){
+                if self.last_instr_end_time().is_some_and(|last_instr_end| reset_time < last_instr_end){
                     return Err(format!(
                         "Requested to insert the all-channel reset instruction at t = {reset_time} [s] \
                         but some channels have instructions spanning until {} [s].\n\

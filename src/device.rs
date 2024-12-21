@@ -281,8 +281,8 @@ where
         // must have precisely the same number of samples to generate
         // since all the channels are assumed to be driven by the same sample clock of the device.
         //
-        // This function first checks `total_samps` are indeed consistent across all compiled channels
-        // and then returns the common `total_samps`.
+        // This function first checks `stop_pos` are indeed consistent across all compiled channels
+        // and then returns the common `stop_pos`.
 
         // Collect `compiled_stop_pos` from all compiled channels into an `IndexMap`
         let chan_stop_pos_map: IndexMap<String, usize> =
@@ -290,7 +290,7 @@ where
                 .iter()
                 .filter_map(|(chan_name, chan)| {
                     match chan.compiled_stop_pos() {
-                        Some(stop_pos) => Some((chan_name, stop_pos)),
+                        Some(stop_pos) => Some((chan_name.clone(), stop_pos)),
                         None => None,  // this channel was not compiled - filter it out
                     }
                 })
@@ -382,6 +382,9 @@ where
                 The connection drop logic may be invoked only after some parts of memory have already been deallocated
                 and thus fail to free-up hardware properly leading to unpredictable consequences like OS freezes.
         */
+        if !self.got_instructions() {
+            return Err(format!("calc_samps(): device {} did not get any instructions", self.name()))
+        }
         if !self.is_fresh_compiled() {
             return Err(format!("calc_samps(): device {} is not fresh-compiled", self.name()))
         }
@@ -390,8 +393,8 @@ where
             return Err(format!("calc_samps(): requested start_pos={start_pos} and end_pos={end_pos} are invalid - end_pos must be no less than start_pos + 1"))
         }
 
-        if !(end_pos <= self.compiled_stop_pos()) {
-            return Err(format!("calc_samps(): requested end_pos={end_pos} exceeds the compiled stop position {}", self.compiled_stop_pos()))
+        if !(end_pos <= self.compiled_stop_pos().unwrap()) {
+            return Err(format!("calc_samps(): requested end_pos={end_pos} exceeds the compiled stop position {}", self.compiled_stop_pos().unwrap()))
         }
 
         let n_chans = self.compiled_chans().len();
