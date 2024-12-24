@@ -454,14 +454,14 @@ where T: Clone + Debug + Send + Sync + 'static
                 //  This might be due to a rounding error for back-to-back pulses. Try to auto-fix it, if possible.
                 //  Action depends on the new instruction duration type:
                 //      - spec dur => trim the new instruction from the right by one tick (provided it is long enough to have at least 1 tick left after trimming)
-                //      - no spec dur => panic since "go_something" is not meant to be inserted right in front of some other instruction
+                //      - no spec dur => panic since "go_this" is not meant to be inserted right in front of some other instruction
                 match new_instr.dur() {
                     Some(dur) => {
                         assert!(dur - 1 >= 1, "1-tick collision on the right cannot be resolved by trimming since the new instruction is only 1 tick long");
                         new_instr.end_spec_mut().as_mut().unwrap().0 -= 1;
                     },
                     None => return Err(format!(
-                        "[Chan {}] Attempt to insert go_something-type instruction {new_instr} right at the start of another instruction {next}",
+                        "[Chan {}] Attempt to insert go_this-type instruction {new_instr} right at the start of another instruction {next}",
                         self.name()
                     )),
                 }
@@ -651,6 +651,67 @@ where T: Clone + Debug + Send + Sync + 'static
         };
         Ok(res_arr)
     }
+
+    fn eval_point(&self, t: f64) -> Result<T, String> {
+        // Sanity check - time `t` should be non-negative
+        // (compare against negative clock half-period to avoid virtual panics for nominal t=0.0)
+        if t < -0.5*self.clk_period() {
+            return Err(format!("Negative time {t} passed"))
+        }
+
+        // Convert `t` to the sample clock grid ticks right away
+        let t_pos = (t * self.samp_rate()).round() as usize;
+
+        // Helper closure to evaluate `Box<dyn FnTraitSet<T>>` instances on single `usize` points
+        let helper_eval_func = |x: usize, func: &Box<dyn FnTraitSet<T>>| -> T {
+            let t_arr = vec![x as f64 * self.clk_period()];
+            let mut res_arr = vec![self.dflt_val()];
+            func.calc(&t_arr[..], &mut res_arr[..]);
+            res_arr[0].clone()
+        };
+
+        // Find the closest preceding instruction which covers `t_pos` (or padding tail of which covers `t_pos`)
+        // - the instruction with the greatest `stop_pos` which still satisfies `start_pos <= t_pos`
+        // Since `self.instr_list' has type `BTreeSet<Instr<T>>`, we have to make-up an instruction to do the search
+        let makeup_instr = Instr::new(t_pos, None, Box::new(ConstFn::new(self.dflt_val())));
+        // The actual search (works because `Instr<T>` implements comparison by `start_pos`)
+        let prev_instr = self.instr_list().range(..=makeup_instr).next_back();
+
+        let val = if let Some(prev_instr) = prev_instr {
+            // There is some instruction before `t_pos`.
+            // It may either have a specified end position or it may be of "go-this" type:
+            //
+            //  - If `end_spec` is specified, there are 2 possibilities:
+            //      - `t_pos` is covered by the instruction interval `[start_pos, end_pos)`
+            //      - or `t_pos` lies in the constant padding tail.
+            //
+            //  - If `end_spec` is None, this is a "go-this" instruction and `t_pos` is automatically covered
+            match prev_instr.end_spec() {
+                Some((end_pos, keep_val)) => {
+                    if t_pos < end_pos {
+                        // within [start_pos, end_pos) interval
+                        helper_eval_func(t_pos, prev_instr.func())
+                    } else {
+                        // padding tail
+                        if keep_val {
+                            helper_eval_func(end_pos, prev_instr.func())
+                        } else {
+                            self.dflt_val()
+                        }
+                    }
+                },
+                None => {
+                    // "go-this" instruction
+                    helper_eval_func(t_pos, prev_instr.func())
+                }
+            }
+        } else {
+            // There are no instructions preceding `t_pos` - this is where channel's default value
+            // is kept until the `start_pos` of the first instruction
+            self.dflt_val()
+        };
+        Ok(val)
+    }
 }
 
 // ==================== Unit tests ====================
@@ -775,7 +836,7 @@ mod test {
             );
             assert_eq!(my_chan.last_instr_end_pos(), 2000000);
 
-            // "Go-something" instruction - unspecified duration, `eff_end_pos = start_pos + 1`
+            // "Go-this" instruction - unspecified duration, `eff_end_pos = start_pos + 1`
             my_chan.add_instr(mock_func.clone(),
                 3.0, None
             );
@@ -867,7 +928,7 @@ mod test {
         }
 
         // #[test]
-        // fn pad_go_something() {
+        // fn pad_go_this() {
         //     todo!()
         // }
 
