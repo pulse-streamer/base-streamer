@@ -86,6 +86,10 @@ where
     fn is_fresh_compiled(&self) -> bool {
         self.devs()
             .values()
+            .filter(|typed_dev| match typed_dev {
+                TypedDev::AO(dev) => dev.got_instructions(),
+                TypedDev::DO(dev) => dev.got_instructions(),
+            })
             .all(
                 |typed_dev| match typed_dev {
                     TypedDev::AO(dev) => dev.is_fresh_compiled(),

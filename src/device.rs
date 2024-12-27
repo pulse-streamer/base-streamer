@@ -144,25 +144,58 @@ where
         Ok(())
     }
 
-    /// A device is compiled if any of its editable channels are compiled.
-    /// Also see [`BaseChannel::is_compiled`]
-    fn is_compiled(&self) -> bool {
-        // FixMe: SERIOUS PROBLEM after introducing BaseChan::eval_point()
-        //  Currently, calling chan::eval_point() will lead to this dev claiming is_compiled=true
-        //  Possible solution: device has its' own `is_fresh_compiled` field which only updates if `device.compile()` is called
-        //  instead of looking at individual channel compile states
-        self.chans().values().any(|chan| chan.is_compiled())
-    }
     /// A device is marked edited if any of its editable channels are edited.
     /// Also see [`BaseChannel::is_edited`]
     fn got_instructions(&self) -> bool {
         self.chans().values().any(|chan| chan.got_instructions())
     }
-    /// A device is marked fresh-compiled if all if its editable channels are freshly compiled.
-    /// Also see [`BaseChannel::is_fresh_compiled`]
-    fn is_fresh_compiled(&self) -> bool {
-        self.chans().values().all(|chan| chan.is_fresh_compiled())
+
+    /// Ensures that compile cache is fresh (matches current edit cache) and is self-consistent
+    fn check_fresh_compiled_and_consistent(&self) -> Result<(), String> {
+        // 2 checks:
+        // - all running channels should be fresh-compiled
+        // - and they should all be compiled to the same stop position
+
+        let not_compiled_chans: Vec<String> = self
+            .running_chans()
+            .iter()
+            .filter(|chan| !chan.is_fresh_compiled())
+            .map(|chan| chan.name())
+            .collect();
+        if !not_compiled_chans.is_empty() {
+            return Err(format!(
+                "[Dev {}] channels {non_compiled_chans:?} are not compiled", self.name()
+            ))
+        }
+
+        let compiled_stop_times: IndexMap<String, usize> = self
+            .running_chans()
+            .iter()
+            .map(|chan| (chan.name(), chan.compiled_stop_pos().unwrap()))
+            .collect();
+        if !compiled_stop_times.values().all_equal() {
+            return Err(format!(
+                "[Dev {}] channels have different compiled stop positions: \n{compiled_stop_times:?}", self.name()
+            ))
+        }
+
+        Ok(())
     }
+
+    fn running_chans(&self) -> Vec<&C> {
+        self.chans()
+            .values()
+            .filter(|chan| chan.got_instructions())
+            .collect()
+    }
+
+    fn running_chans_mut(&mut self) -> Vec<&mut C> {
+        self.chans_mut()
+            .values_mut()
+            .filter(|chan| chan.got_instructions())
+            .collect()
+    }
+
     /// Clears the edit-cache fields for all channels.
     /// Also see [`BaseChannel::clear_edit_cache`]
     fn clear_edit_cache(&mut self) {
@@ -257,63 +290,53 @@ where
         self.compile_base(stop_time)
     }
 
-    /// Returns a vector of compiled channels based on the given criteria.
-    ///
-    /// Filters the device's channels based on their compiled state and optional properties such as
-    /// streamability and editability.
-    ///
-    /// # Arguments
-    /// - `require_streamable`: If `true`, only compiled channels marked as streamable will be included in the result.
-    /// - `require_editable`: If `true`, only compiled channels marked as editable will be included in the result.
-    ///
-    /// # Returns
-    /// A `Vec` containing references to the channels that match the provided criteria.
-    fn compiled_chans(&self) -> Vec<&C> {
-        self.chans()
-            .values()
-            .filter(|chan| chan.is_compiled())
-            .collect()
-    }
-
     /// Returns the total number of samples the card will generate according to the current compile cache.
     fn compiled_stop_pos(&self) -> Option<usize> {
-        // The assumption is that all the channels of any given device
-        // must have precisely the same number of samples to generate
-        // since all the channels are assumed to be driven by the same sample clock of the device.
-        //
-        // This function first checks `stop_pos` are indeed consistent across all compiled channels
-        // and then returns the common `stop_pos`.
+        self.check_fresh_compiled_and_consistent().unwrap();
 
-        // Collect `compiled_stop_pos` from all compiled channels into an `IndexMap`
-        let chan_stop_pos_map: IndexMap<String, usize> =
-            self.chans()
-                .iter()
-                .filter_map(|(chan_name, chan)| {
-                    match chan.compiled_stop_pos() {
-                        Some(stop_pos) => Some((chan_name.clone(), stop_pos)),
-                        None => None,  // this channel was not compiled - filter it out
-                    }
-                })
-                .collect();
-
-        if chan_stop_pos_map.is_empty() {
+        if self.running_chans().is_empty() {
             None
         } else {
-            // To verify consistency, compare all against the first one:
-            let &first_val = chan_stop_pos_map.values().next().unwrap();
-            let all_equal = chan_stop_pos_map.values().all(|&stop_pos| stop_pos == first_val);
-            if all_equal {
-                Some(first_val)
-            } else {
-                panic!(
-                    "Channels of device {} have unequal compiled stop positions:\n\
-                    {:?}\n\
-                    When working at a device level, you are not supposed to compile individual channels directly. \
-                    Instead, call `my_device.compile(stop_pos)` and it will compile all channels with the same `stop_pos`",
-                    self.name(), chan_stop_pos_map
-                )
-            }
+            self.running_chans().first().unwrap().compiled_stop_pos()
         }
+
+        // // The assumption is that all the channels of any given device
+        // // must have precisely the same number of samples to generate
+        // // since all the channels are assumed to be driven by the same sample clock of the device.
+        // //
+        // // This function first checks `stop_pos` are indeed consistent across all compiled channels
+        // // and then returns the common `stop_pos`.
+        //
+        // // Collect `compiled_stop_pos` from all compiled channels into an `IndexMap`
+        // let chan_stop_pos_map: IndexMap<String, usize> =
+        //     self.chans()
+        //         .iter()
+        //         .filter_map(|(chan_name, chan)| {
+        //             match chan.compiled_stop_pos() {
+        //                 Some(stop_pos) => Some((chan_name.clone(), stop_pos)),
+        //                 None => None,  // this channel was not compiled - filter it out
+        //             }
+        //         })
+        //         .collect();
+        //
+        // if chan_stop_pos_map.is_empty() {
+        //     None
+        // } else {
+        //     // To verify consistency, compare all against the first one:
+        //     let &first_val = chan_stop_pos_map.values().next().unwrap();
+        //     let all_equal = chan_stop_pos_map.values().all(|&stop_pos| stop_pos == first_val);
+        //     if all_equal {
+        //         Some(first_val)
+        //     } else {
+        //         panic!(
+        //             "Channels of device {} have unequal compiled stop positions:\n\
+        //             {:?}\n\
+        //             When working at a device level, you are not supposed to compile individual channels directly. \
+        //             Instead, call `my_device.compile(stop_pos)` and it will compile all channels with the same `stop_pos`",
+        //             self.name(), chan_stop_pos_map
+        //         )
+        //     }
+        // }
     }
 
     /// Calculates the maximum stop time among all compiled channels.
@@ -385,9 +408,7 @@ where
         if !self.got_instructions() {
             return Err(format!("calc_samps(): device {} did not get any instructions", self.name()))
         }
-        if !self.is_fresh_compiled() {
-            return Err(format!("calc_samps(): device {} is not fresh-compiled", self.name()))
-        }
+        self.check_fresh_compiled_and_consistent()?;
 
         if !(end_pos >= start_pos + 1) {
             return Err(format!("calc_samps(): requested start_pos={start_pos} and end_pos={end_pos} are invalid - end_pos must be no less than start_pos + 1"))

@@ -118,36 +118,35 @@ where T: Clone + Debug + Send + Sync + 'static
     // Immutable field methods
     fn name(&self) -> String;
     fn samp_rate(&self) -> f64;
-    /// The `fresh_compiled` field is set to true by each [`BaseChannel::compile`] call and
-    /// `false` by each [`BaseChannel::add_instr`].  
-    fn is_fresh_compiled(&self) -> bool;
     /// The `default_value` trait specifies the signal value for not explicitly defined intervals.
     fn dflt_val(&self) -> T;
     fn rst_val(&self) -> T;
+
     /// Provides a reference to the edit cache of instrbook list.
     fn instr_list(&self) -> &BTreeSet<Instr<T>>;
     /// Returns the ending points of compiled instructions.
     fn compile_cache_ends(&self) -> &Vec<usize>;
     /// Retrieves the values of compiled instructions.
     fn compile_cache_fns(&self) -> &Vec<Box<dyn FnTraitSet<T>>>;
+    /// The `fresh_compiled` field is set to true by each [`BaseChannel::compile`] call and
+    /// `false` by each [`BaseChannel::add_instr`].
+    fn is_fresh_compiled(&self) -> bool;
+
     // Mutable field methods
-    /// Mutable access to the `fresh_compiled` status.
-    fn fresh_compiled_mut(&mut self) -> &mut bool;
     /// Mutable access to the instruction list.
     fn instr_list_mut(&mut self) -> &mut BTreeSet<Instr<T>>;
     /// Mutable access to the ending points of compiled instructions.
     fn compile_cache_ends_mut(&mut self) -> &mut Vec<usize>;
     /// Mutable access to the values of compiled instructions.
     fn compile_cache_fns_mut(&mut self) -> &mut Vec<Box<dyn FnTraitSet<T>>>;
+    /// Mutable access to the `fresh_compiled` status.
+    fn is_fresh_compiled_mut(&mut self) -> &mut bool;
 
     /// Returns sample clock period calculated as `1.0 / self.samp_rate()`
     fn clk_period(&self) -> f64 {
         1.0 / self.samp_rate()
     }
-    /// Channel is marked as compiled if its compilation-data field `instr_end` is nonempty
-    fn is_compiled(&self) -> bool {
-        !self.compile_cache_ends().is_empty()
-    }
+
     /// Channel is marked as edited if its edit-cache field `instr_list` is nonempty
     fn got_instructions(&self) -> bool {
         !self.instr_list().is_empty()
@@ -273,7 +272,7 @@ where T: Clone + Debug + Send + Sync + 'static
         assert_eq!(self.compile_cache_fns().len(), self.compile_cache_ends().len());
         assert_eq!(self.compiled_stop_pos().unwrap(), stop_pos);
 
-        *self.fresh_compiled_mut() = true;
+        *self.is_fresh_compiled_mut() = true;
         Ok(())
     }
 
@@ -281,17 +280,17 @@ where T: Clone + Debug + Send + Sync + 'static
     ///
     /// If the compiled cache is empty, it also sets the `fresh_compiled` field to `true`.
     fn clear_edit_cache(&mut self) {
-        self.clear_compile_cache();
         self.instr_list_mut().clear();
+        self.clear_compile_cache();
     }
     /// Clears the compiled cache of the channel.
     ///
     /// Specifically, the method clears the `instr_end` and `instr_val` fields.
     /// If the edit cache is empty, it also sets the `fresh_compiled` field to `true`.
     fn clear_compile_cache(&mut self) {
-        *self.fresh_compiled_mut() = self.instr_list().is_empty();
         self.compile_cache_ends_mut().clear();
         self.compile_cache_fns_mut().clear();
+        *self.is_fresh_compiled_mut() = self.instr_list().is_empty();
     }
 
     /// Returns the stop position of the compiled instructions.
@@ -479,7 +478,7 @@ where T: Clone + Debug + Send + Sync + 'static
         };
 
         self.instr_list_mut().insert(new_instr);
-        *self.fresh_compiled_mut() = false;
+        *self.is_fresh_compiled_mut() = false;
         Ok(())
     }
     /// Utility function to add a constant instruction to the channel
