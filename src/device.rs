@@ -153,46 +153,51 @@ where
     /// Ensures that compile cache is fresh (matches current edit cache) and is self-consistent
     fn validate_compile_cache(&self) -> Result<(), String> {
         // 2 checks:
-        // - all active channels pass `validate_compile_cache()` (compile cache matches edit cache)
+        // - each active channels passes `validate_compile_cache()` (meaning it is "fresh compiled" - compile cache matches current edit cache)
         // - and they should all be compiled to the same stop position (since all channels of a given device share the same sample clock)
 
-        let not_compiled_chans: Vec<String> = self
+        let failed_chan_msgs: Vec<String> = self
             .active_chans()
-            .values()
-            .filter(|chan| chan.validate_compile_cache().is_err())
-            .map(|chan| chan.name())
+            .iter()
+            .filter_map(|chan| {
+                if let Err(msg) = chan.validate_compile_cache() {
+                    Some(msg)
+                } else {
+                    None
+                }
+            })
             .collect();
-        if !not_compiled_chans.is_empty() {
-            return Err(format!("[Dev {}] channels {non_compiled_chans:?} are not fresh-compiled", self.name()))
+        if !failed_chan_msgs.is_empty() {
+            let mut full_err_msg = String::new();
+            for msg in failed_chan_msgs {
+                full_err_msg.push_str(&format!("{msg}\n"))
+            };
+            return Err(format!("[Dev {}] the following channels failed compile cache validation:\n{err_msg}", self.name()))
         }
 
         let compiled_stop_times: IndexMap<String, usize> = self
             .active_chans()
-            .values()
+            .iter()
             .map(|chan| (chan.name(), chan.compiled_stop_pos()))
             .collect();
         if !compiled_stop_times.values().all_equal() {
-            return Err(format!(
-                "[Dev {}] channels have different compiled stop positions: \n{compiled_stop_times:?}", self.name()
-            ))
+            return Err(format!("[Dev {}] channels have different compiled stop positions: \n{compiled_stop_times:?}", self.name()))
         }
 
         Ok(())
     }
 
-    fn active_chans(&self) -> IndexMap<String, &C> {
+    fn active_chans(&self) -> Vec<&C> {
         self.chans()
-            .iter()
-            .filter(|(_chan_name, chan)| chan.got_instructions())
-            .map(|(chan_name, chan)| (chan_name.to_string(), chan))
+            .values()
+            .filter(|chan| chan.got_instructions())
             .collect()
     }
 
-    fn active_chans_mut(&mut self) -> IndexMap<String, &mut C> {
+    fn active_chans_mut(&mut self) -> Vec<&mut C> {
         self.chans_mut()
-            .iter_mut()
-            .filter(|(_chan_name, chan)| chan.got_instructions())
-            .map(|(chan_name, chan)| (chan_name.to_string(), chan))
+            .values_mut()
+            .filter(|chan| chan.got_instructions())
             .collect()
     }
 
@@ -211,7 +216,6 @@ where
         }
     }
 
-    // ToDo: revise
     fn is_closing_edge_clipped(&self, stop_tick: usize) -> bool {
         if self.last_instr_end_pos().is_some_and(|last_end_pos| stop_tick < last_end_pos) {
             panic!("Given stop_tick {stop_tick} is below the last instruction end_pos {}", self.last_instr_end_pos().unwrap())
@@ -248,6 +252,8 @@ where
     /// - `stop_time`: The stop time used to compile the channels.
     fn compile_base(&mut self, stop_time: f64) -> Result<f64, String> {
         if !self.got_instructions() {
+            // @Backend developers: whenever iterating over devices, you should always
+            // filter by `got_instructions()` to only interact with active devices.
             return Err(format!("Device {} did not get any instructions", self.name()))
         }
         let stop_tick = (stop_time * self.samp_rate()).round() as usize;
@@ -278,8 +284,8 @@ where
             stop_tick
         };
 
-        // Compile all channels
-        for chan in self.active_chans_mut().values_mut() {
+        // Compile all active channels
+        for chan in self.active_chans_mut() {
             chan.compile(stop_pos)?
         };
 
@@ -318,7 +324,6 @@ where
         }
 
         self.active_chans()
-            .values()
             .last()
             .unwrap()
             .compiled_stop_pos()
@@ -399,11 +404,11 @@ where
             return Err(format!("calc_samps(): requested start_pos={start_pos} and end_pos={end_pos} are invalid - end_pos must be no less than start_pos + 1"))
         }
 
-        if !(end_pos <= self.compiled_stop_pos().unwrap()) {
-            return Err(format!("calc_samps(): requested end_pos={end_pos} exceeds the compiled stop position {}", self.compiled_stop_pos().unwrap()))
+        if !(end_pos <= self.compiled_stop_pos()) {
+            return Err(format!("calc_samps(): requested end_pos={end_pos} exceeds the compiled stop position {}", self.compiled_stop_pos()))
         }
 
-        let n_chans = self.compiled_chans().len();
+        let n_chans = self.active_chans().len();
         let n_samps = end_pos - start_pos;
         if n_chans * n_samps > samp_buf.len() {
             return Err(format!(
@@ -418,7 +423,7 @@ where
         let t_arr = Array1::linspace(start_t, end_t, n_samps);
         let t_arr_slice = t_arr.as_slice().expect("[BaseDev::calc_samps()] BUG: t_arr.as_slice() returned None");
 
-        for (chan_row_idx, chan) in self.compiled_chans().iter().enumerate() {
+        for (chan_row_idx, chan) in self.active_chans().iter().enumerate() {
             chan.fill_samps(
                 start_pos,
                 &mut samp_buf[chan_row_idx * n_samps .. (chan_row_idx + 1) * n_samps],
