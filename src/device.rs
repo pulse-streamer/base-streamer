@@ -150,43 +150,6 @@ where
         self.chans().values().any(|chan| chan.got_instructions())
     }
 
-    /// Ensures that compile cache is fresh (matches current edit cache) and is self-consistent
-    fn validate_compile_cache(&self) -> Result<(), String> {
-        // 2 checks:
-        // - each active channels passes `validate_compile_cache()` (meaning it is "fresh compiled" - compile cache matches current edit cache)
-        // - and they should all be compiled to the same stop position (since all channels of a given device share the same sample clock)
-
-        let failed_chan_msgs: Vec<String> = self
-            .active_chans()
-            .iter()
-            .filter_map(|chan| {
-                if let Err(msg) = chan.validate_compile_cache() {
-                    Some(msg)
-                } else {
-                    None
-                }
-            })
-            .collect();
-        if !failed_chan_msgs.is_empty() {
-            let mut full_err_msg = String::new();
-            for msg in failed_chan_msgs {
-                full_err_msg.push_str(&format!("{msg}\n"))
-            };
-            return Err(format!("[Dev {}] the following channels failed compile cache validation:\n{err_msg}", self.name()))
-        }
-
-        let compiled_stop_times: IndexMap<String, usize> = self
-            .active_chans()
-            .iter()
-            .map(|chan| (chan.name(), chan.compiled_stop_pos()))
-            .collect();
-        if !compiled_stop_times.values().all_equal() {
-            return Err(format!("[Dev {}] channels have different compiled stop positions: \n{compiled_stop_times:?}", self.name()))
-        }
-
-        Ok(())
-    }
-
     fn active_chans(&self) -> Vec<&C> {
         self.chans()
             .values()
@@ -295,6 +258,55 @@ where
 
     fn compile(&mut self, stop_time: f64) -> Result<f64, String> {
         self.compile_base(stop_time)
+    }
+
+    /// Base of `validate_compile_cache()`
+    fn validate_compile_cache_base(&self) -> Result<(), String> {
+        // 3 checks:
+        // - this device is active in the first place;
+        // - each active channels passes `validate_compile_cache()` test (meaning it is "fresh compiled" - compile cache matches current edit cache);
+        // - and they should all be compiled to the same stop position (since all channels of a given device share the same sample clock)
+
+        if !self.got_instructions() {
+            // @Backend developers: whenever iterating over devices, you should always
+            // filter by `got_instructions()` to only interact with active devices.
+            return Err(format!("Device {} does not have any instructions and is not active", self.name()))
+        }
+
+        let failed_chan_msgs: Vec<String> = self
+            .active_chans()
+            .iter()
+            .filter_map(|chan| {
+                if let Err(msg) = chan.validate_compile_cache() {
+                    Some(msg)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        if !failed_chan_msgs.is_empty() {
+            let mut full_err_msg = String::new();
+            for msg in failed_chan_msgs {
+                full_err_msg.push_str(&format!("{msg}\n"))
+            };
+            return Err(format!("[Dev {}] the following channels failed compile cache validation:\n{err_msg}", self.name()))
+        }
+
+        let compiled_stop_times: IndexMap<String, usize> = self
+            .active_chans()
+            .iter()
+            .map(|chan| (chan.name(), chan.compiled_stop_pos()))
+            .collect();
+        if !compiled_stop_times.values().all_equal() {
+            return Err(format!("[Dev {}] channels have different compiled stop positions: \n{compiled_stop_times:?}", self.name()))
+        }
+
+        Ok(())
+    }
+
+    /// Ensures that compile cache is fresh (matches current edit cache) and is self-consistent
+    fn validate_compile_cache(&self) -> Result<(), String> {
+        self.validate_compile_cache_base()
     }
 
     /// Returns the total number of samples the card will generate according to the current compile cache.
