@@ -189,8 +189,9 @@ where T: Clone + Debug + Send + Sync + 'static
 
         self.clear_compile_cache();
 
-        if self.instr_list().is_empty() {
-            return Ok(())
+        // Sanity checks:
+        if !self.got_instructions() {
+            return Err(format!("Channel {} does not have any instructions", self.name()))
         }
         if stop_pos < self.last_instr_end_pos().unwrap() {
             return Err(format!(
@@ -293,18 +294,47 @@ where T: Clone + Debug + Send + Sync + 'static
         *self.is_fresh_compiled_mut() = self.instr_list().is_empty();
     }
 
+    fn validate_compile_cache(&self) -> Result<(), String> {
+        if self.is_fresh_compiled() {
+            Ok(())
+        } else {
+            Err(format!("Channel {} is not fresh-compiled. Call compile() first", self.name()))
+        }
+    }
+
     /// Returns the stop position of the compiled instructions.
-    ///
-    /// If the channel is not compiled, it returns `None`. Otherwise, it retrieves the last end position
-    /// from the compiled cache.
-    fn compiled_stop_pos(&self) -> Option<usize> {
-        self.compile_cache_ends()
-            .last()
-            .cloned()
+    fn compiled_stop_pos(&self) -> usize {
+        // Sanity checks:
+        if let Err(msg) = self.validate_compile_cache() {
+            panic!(
+                "{msg}\n\
+                \n\
+                @Backend developers: whenever accessing compile cache, you should first call `validate_compile_cache()` \
+                to ensure that compile cache is valid - up-to-date with the edit cache and has no inconsistencies. \n\
+                \n\
+                This function is meant to be the place to gracefully handle the Err variant if it occurs \
+                (typically due to users forgetting to re-compile after adding pulses). \n\
+                \n\
+                In contrast, other functions assume the cache is valid and rely on it. Some may still \
+                do a 'validate_compile_cache()' under the hood to catch bugs but they will panic on Err."
+            )
+        }
+        if self.compile_cache_ends().is_empty() {
+            // Compile cache is valid, but it is empty - this is only possible if `instr_list` is also empty.
+            // Panic, since we are always supposed to filter the inactive channels out.
+            panic!(
+                "Channel {} has a valid, but empty compile cache - this channel didn't get any instructions and is inactive.\n\
+                \n\
+                @Backend developers: when iterating over channels, you should always filter by `got_instructions()` and skip inactive ones",
+                self.name()
+            )
+        }
+
+        self.compile_cache_ends().last().unwrap().clone()
     }
     /// Same as [`total_samps`] but the result is multiplied by sample clock period.
-    fn compiled_stop_time(&self) -> Option<f64> {
-        self.compiled_stop_pos().map(|stop_pos| stop_pos as f64 * self.clk_period())
+    fn compiled_stop_time(&self) -> f64 {
+        self.compiled_stop_pos() as f64 * self.clk_period()
     }
 
     /// Returns the effective `end_pos` of the last instruction.
@@ -511,9 +541,7 @@ where T: Clone + Debug + Send + Sync + 'static
         if !self.got_instructions() {
             return Err(format!("[Chan {}] fill_samps(): did not get any instructions", self.name()))
         }
-        if !self.is_fresh_compiled() {
-            return Err(format!("[Chan {}] fill_samps(): Compile before attempting to calculate samples.", self.name()))
-        }
+        self.validate_compile_cache()?;
         if res_arr.len() != t_arr.len() {
             return Err(format!(
                 "[Chan {}] fill_samps(): provided res_arr.len() = {} and t_arr.len() = {} do not match",
@@ -569,12 +597,11 @@ where T: Clone + Debug + Send + Sync + 'static
     /// Typically, users will request n_samps which is smaller than the actual number of clock ticks
     /// between start_time and end_time because otherwise plotting may be extremely slow.
     fn calc_nsamps(&self, n_samps: usize, start_time: Option<f64>, end_time: Option<f64>) -> Result<Vec<T>, String> {
+        // Sanity checks
         if !self.got_instructions() {
-            return Err(format!("[Chan {}] fill_samps(): did not get any instructions", self.name()))
+            return Err(format!("Channel {} did not get any instructions", self.name()))
         }
-        if !self.is_fresh_compiled() {
-            return Err(format!("[Chan {}] Attempting to calculate signal on not-compiled channel", self.name()))
-        }
+        self.validate_compile_cache()?;
 
         let start_time = match start_time {
             Some(start_time) => start_time,
@@ -655,7 +682,7 @@ where T: Clone + Debug + Send + Sync + 'static
         // Sanity check - time `t` should be non-negative
         // (compare against negative clock half-period to avoid virtual panics for nominal t=0.0)
         if t < -0.5*self.clk_period() {
-            return Err(format!("Negative time {t} passed"))
+            return Err(format!("[Chan {}] Negative time {t} passed", self.name()))
         }
 
         // Convert `t` to the sample clock grid ticks right away

@@ -151,27 +151,25 @@ where
     }
 
     /// Ensures that compile cache is fresh (matches current edit cache) and is self-consistent
-    fn check_fresh_compiled_and_consistent(&self) -> Result<(), String> {
+    fn validate_compile_cache(&self) -> Result<(), String> {
         // 2 checks:
-        // - all running channels should be fresh-compiled
-        // - and they should all be compiled to the same stop position
+        // - all active channels pass `validate_compile_cache()` (compile cache matches edit cache)
+        // - and they should all be compiled to the same stop position (since all channels of a given device share the same sample clock)
 
         let not_compiled_chans: Vec<String> = self
-            .running_chans()
-            .iter()
-            .filter(|chan| !chan.is_fresh_compiled())
+            .active_chans()
+            .values()
+            .filter(|chan| chan.validate_compile_cache().is_err())
             .map(|chan| chan.name())
             .collect();
         if !not_compiled_chans.is_empty() {
-            return Err(format!(
-                "[Dev {}] channels {non_compiled_chans:?} are not compiled", self.name()
-            ))
+            return Err(format!("[Dev {}] channels {non_compiled_chans:?} are not fresh-compiled", self.name()))
         }
 
         let compiled_stop_times: IndexMap<String, usize> = self
-            .running_chans()
-            .iter()
-            .map(|chan| (chan.name(), chan.compiled_stop_pos().unwrap()))
+            .active_chans()
+            .values()
+            .map(|chan| (chan.name(), chan.compiled_stop_pos()))
             .collect();
         if !compiled_stop_times.values().all_equal() {
             return Err(format!(
@@ -182,17 +180,19 @@ where
         Ok(())
     }
 
-    fn running_chans(&self) -> Vec<&C> {
+    fn active_chans(&self) -> IndexMap<String, &C> {
         self.chans()
-            .values()
-            .filter(|chan| chan.got_instructions())
+            .iter()
+            .filter(|(_chan_name, chan)| chan.got_instructions())
+            .map(|(chan_name, chan)| (chan_name.to_string(), chan))
             .collect()
     }
 
-    fn running_chans_mut(&mut self) -> Vec<&mut C> {
+    fn active_chans_mut(&mut self) -> IndexMap<String, &mut C> {
         self.chans_mut()
-            .values_mut()
-            .filter(|chan| chan.got_instructions())
+            .iter_mut()
+            .filter(|(_chan_name, chan)| chan.got_instructions())
+            .map(|(chan_name, chan)| (chan_name.to_string(), chan))
             .collect()
     }
 
@@ -211,6 +211,7 @@ where
         }
     }
 
+    // ToDo: revise
     fn is_closing_edge_clipped(&self, stop_tick: usize) -> bool {
         if self.last_instr_end_pos().is_some_and(|last_end_pos| stop_tick < last_end_pos) {
             panic!("Given stop_tick {stop_tick} is below the last instruction end_pos {}", self.last_instr_end_pos().unwrap())
@@ -245,9 +246,9 @@ where
     ///
     /// # Arguments
     /// - `stop_time`: The stop time used to compile the channels.
-    fn compile_base(&mut self, stop_time: f64) -> Result<Option<f64>, String> {
+    fn compile_base(&mut self, stop_time: f64) -> Result<f64, String> {
         if !self.got_instructions() {
-            return Ok(None)
+            return Err(format!("Device {} did not get any instructions", self.name()))
         }
         let stop_tick = (stop_time * self.samp_rate()).round() as usize;
         if stop_tick < self.last_instr_end_pos().unwrap() {
@@ -278,7 +279,7 @@ where
         };
 
         // Compile all channels
-        for chan in self.chans_mut().values_mut() {
+        for chan in self.active_chans_mut().values_mut() {
             chan.compile(stop_pos)?
         };
 
@@ -286,57 +287,41 @@ where
         Ok(self.compiled_stop_time())
     }
 
-    fn compile(&mut self, stop_time: f64) -> Result<Option<f64>, String> {
+    fn compile(&mut self, stop_time: f64) -> Result<f64, String> {
         self.compile_base(stop_time)
     }
 
     /// Returns the total number of samples the card will generate according to the current compile cache.
-    fn compiled_stop_pos(&self) -> Option<usize> {
-        self.check_fresh_compiled_and_consistent().unwrap();
-
-        if self.running_chans().is_empty() {
-            None
-        } else {
-            self.running_chans().first().unwrap().compiled_stop_pos()
+    fn compiled_stop_pos(&self) -> usize {
+        // Sanity checks:
+        if self.active_chans().is_empty() {
+            panic!(
+                "Device {} hasn't gotten any instructions yet and is currently inactive.\n\
+                \n\
+                @Backend developers: when iterating over devices, you should always filter by `got_instructions()` and skip inactive ones",
+                self.name()
+            )
+        }
+        if let Err(msg) = self.validate_compile_cache() {
+            panic!(
+                "{msg}\n\
+                \n\
+                @Backend developers: whenever accessing compile cache, you should first call `validate_compile_cache()` \
+                to ensure that compile cache is valid - up-to-date with the edit cache and has no inconsistencies. \n\
+                \n\
+                This function is meant to be the place to gracefully handle the Err variant if it occurs \
+                (typically due to users forgetting to re-compile after adding pulses). \n\
+                \n\
+                In contrast, other functions assume the cache is valid and rely on it. Some may still \
+                do a 'validate_compile_cache()' under the hood to catch bugs but they will panic on Err."
+            )
         }
 
-        // // The assumption is that all the channels of any given device
-        // // must have precisely the same number of samples to generate
-        // // since all the channels are assumed to be driven by the same sample clock of the device.
-        // //
-        // // This function first checks `stop_pos` are indeed consistent across all compiled channels
-        // // and then returns the common `stop_pos`.
-        //
-        // // Collect `compiled_stop_pos` from all compiled channels into an `IndexMap`
-        // let chan_stop_pos_map: IndexMap<String, usize> =
-        //     self.chans()
-        //         .iter()
-        //         .filter_map(|(chan_name, chan)| {
-        //             match chan.compiled_stop_pos() {
-        //                 Some(stop_pos) => Some((chan_name.clone(), stop_pos)),
-        //                 None => None,  // this channel was not compiled - filter it out
-        //             }
-        //         })
-        //         .collect();
-        //
-        // if chan_stop_pos_map.is_empty() {
-        //     None
-        // } else {
-        //     // To verify consistency, compare all against the first one:
-        //     let &first_val = chan_stop_pos_map.values().next().unwrap();
-        //     let all_equal = chan_stop_pos_map.values().all(|&stop_pos| stop_pos == first_val);
-        //     if all_equal {
-        //         Some(first_val)
-        //     } else {
-        //         panic!(
-        //             "Channels of device {} have unequal compiled stop positions:\n\
-        //             {:?}\n\
-        //             When working at a device level, you are not supposed to compile individual channels directly. \
-        //             Instead, call `my_device.compile(stop_pos)` and it will compile all channels with the same `stop_pos`",
-        //             self.name(), chan_stop_pos_map
-        //         )
-        //     }
-        // }
+        self.active_chans()
+            .values()
+            .last()
+            .unwrap()
+            .compiled_stop_pos()
     }
 
     /// Calculates the maximum stop time among all compiled channels.
@@ -347,8 +332,8 @@ where
     ///
     /// # Returns
     /// A `f64` representing the maximum stop time (in seconds) across all compiled channels.
-    fn compiled_stop_time(&self) -> Option<f64> {
-        self.compiled_stop_pos().map(|stop_pos| stop_pos as f64 * self.clk_period())
+    fn compiled_stop_time(&self) -> f64 {
+        self.compiled_stop_pos() as f64 * self.clk_period()
     }
 
     fn last_instr_end_pos(&self) -> Option<usize> {
@@ -408,7 +393,7 @@ where
         if !self.got_instructions() {
             return Err(format!("calc_samps(): device {} did not get any instructions", self.name()))
         }
-        self.check_fresh_compiled_and_consistent()?;
+        self.validate_compile_cache()?;
 
         if !(end_pos >= start_pos + 1) {
             return Err(format!("calc_samps(): requested start_pos={start_pos} and end_pos={end_pos} are invalid - end_pos must be no less than start_pos + 1"))
