@@ -170,13 +170,18 @@ where
         for chan in self.chans_mut().values_mut() {
             chan.clear_edit_cache()
         }
+        self.clear_compile_cache();
     }
     /// Clears the compile-cache fields for all channels.
     /// Also see [`BaseChannel::clear_compile_cache`]
-    fn clear_compile_cache(&mut self) {
+    fn clear_compile_cache_base(&mut self) {
         for chan in self.chans_mut().values_mut() {
             chan.clear_compile_cache()
         }
+    }
+
+    fn clear_compile_cache(&mut self) {
+        self.clear_compile_cache_base()
     }
 
     fn is_closing_edge_clipped(&self, stop_tick: usize) -> bool {
@@ -276,29 +281,23 @@ where
         let failed_chan_msgs: Vec<String> = self
             .active_chans()
             .iter()
-            .filter_map(|chan| {
-                if let Err(msg) = chan.validate_compile_cache() {
-                    Some(msg)
-                } else {
-                    None
-                }
-            })
+            .filter_map(|chan| chan.validate_compile_cache().err())
             .collect();
         if !failed_chan_msgs.is_empty() {
             let mut full_err_msg = String::new();
             for msg in failed_chan_msgs {
                 full_err_msg.push_str(&format!("{msg}\n"))
             };
-            return Err(format!("[Dev {}] the following channels failed compile cache validation:\n{err_msg}", self.name()))
+            return Err(format!("[Dev {}] the following channels failed compile cache validation:\n{full_err_msg}", self.name()))
         }
 
-        let compiled_stop_times: IndexMap<String, usize> = self
+        let compiled_stop_positions: IndexMap<String, usize> = self
             .active_chans()
             .iter()
             .map(|chan| (chan.name(), chan.compiled_stop_pos()))
             .collect();
-        if !compiled_stop_times.values().all_equal() {
-            return Err(format!("[Dev {}] channels have different compiled stop positions: \n{compiled_stop_times:?}", self.name()))
+        if !compiled_stop_positions.values().all_equal() {
+            return Err(format!("[Dev {}] channels have different compiled stop positions: \n{compiled_stop_positions:?}", self.name()))
         }
 
         Ok(())
@@ -312,7 +311,7 @@ where
     /// Returns the total number of samples the card will generate according to the current compile cache.
     fn compiled_stop_pos(&self) -> usize {
         // Sanity checks:
-        if self.active_chans().is_empty() {
+        if !self.got_instructions() {
             panic!(
                 "Device {} hasn't gotten any instructions yet and is currently inactive.\n\
                 \n\
