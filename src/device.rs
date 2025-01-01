@@ -35,6 +35,7 @@
 use std::fmt::Debug;
 use ndarray::Array1;
 use indexmap::IndexMap;
+use itertools::Itertools;
 use crate::channel::BaseChan;
 
 /// The `BaseDevice` trait defines the fundamental operations and attributes of a National Instruments (NI) device.

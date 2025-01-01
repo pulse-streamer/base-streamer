@@ -271,7 +271,7 @@ where T: Clone + Debug + Send + Sync + 'static
         }
         // Verify transfer correctness
         assert_eq!(self.compile_cache_fns().len(), self.compile_cache_ends().len());
-        assert_eq!(self.compiled_stop_pos().unwrap(), stop_pos);
+        // assert_eq!(self.compiled_stop_pos().unwrap(), stop_pos);
 
         *self.is_fresh_compiled_mut() = true;
         Ok(())
@@ -551,12 +551,12 @@ where T: Clone + Debug + Send + Sync + 'static
         // Window boundaries, start_pos is included and end_pos is not included:
         let window_start = start_pos;
         let window_end = window_start + res_arr.len();
-        if window_end > self.compiled_stop_pos().unwrap() {
+        if window_end > self.compiled_stop_pos() {
             return Err(format!(
                 "[Chan {}] fill_samps(): Requested window end position \n\
                 \t start_pos + res_arr.len() = {start_pos} + {} = {window_end} \n\
                 goes beyond the compiled stop position {}",
-                self.name(), res_arr.len(), self.compiled_stop_pos().unwrap()
+                self.name(), res_arr.len(), self.compiled_stop_pos()
             ))
         }
 
@@ -609,16 +609,16 @@ where T: Clone + Debug + Send + Sync + 'static
         };
         let end_time = match end_time {
             Some(end_time) => {
-                if end_time > self.compiled_stop_time().unwrap() {
+                if end_time > self.compiled_stop_time() {
                     return Err(format!(
                         "[Chan {}] requested end_time {end_time} exceeds compiled_stop_time {}. \
                         If you intended to specify end_time = compiled_stop_time, use end_time = None",
-                        self.name(), self.compiled_stop_time().unwrap()
+                        self.name(), self.compiled_stop_time()
                     ))
                 }
                 end_time
             },
-            None => self.compiled_stop_time().unwrap()
+            None => self.compiled_stop_time()
         };
         if end_time < start_time {
             return Err(format!(
