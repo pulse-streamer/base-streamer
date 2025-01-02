@@ -156,8 +156,7 @@ where T: Clone + Debug + Send + Sync + 'static
     ///
     /// The `compile` method processes the instruction list (`instr_list`) to generate a compiled
     /// list of end positions (`instr_end`) and corresponding values (`instr_val`). During compilation,
-    /// it ensures that instructions are contiguous, adding padding as necessary. If two consecutive
-    /// instructions have the same value, they are merged into a single instruction. 
+    /// it ensures that instructions are contiguous, adding padding as necessary.
     /// The unspecified interval from 0 to the first instruction is kept at the channel default.
     ///
     /// # Arguments
@@ -170,23 +169,7 @@ where T: Clone + Debug + Send + Sync + 'static
     /// This method will panic if the last instruction's end position in the `instr_list` exceeds the specified `stop_pos`.
     ///
     /// # Examples
-    ///
-    /// ```
-    /// # use nicompiler_backend::channel::*;
-    /// # use nicompiler_backend::instruction::*;
-    /// let mut channel = Channel::new(TaskType::DO, "port0/line0", 1e7, 0.);
-    ///
-    /// // Add some instructions to the channel.
-    /// channel.add_instr(Instruction::new_const(1.), 0., Some((1., false)));
-    /// channel.add_instr(Instruction::new_const(0.), 1., Some((1., false)));
-    ///
-    /// // Compile the instructions up to a specified stop position.
-    /// channel.compile(3e7 as usize); // Compile up to 3 seconds (given a sampling rate of 10^7)
-    /// ```
     fn compile(&mut self, stop_pos: usize) -> Result<(), String> {
-        // ToDo: use self.instr_fn_mut() directly since no func merging is done
-        //  maybe rename `compile` to `calc_pad`
-
         self.clear_compile_cache();
 
         // Sanity checks:
@@ -198,18 +181,27 @@ where T: Clone + Debug + Send + Sync + 'static
                 "[Channel {}] Attempting to compile with stop_pos {} while instructions end at {}",
                 self.name(), stop_pos, self.last_instr_end_pos().unwrap()
             ))
-
         }
 
         // (1) Calculate exhaustive instruction coverage from 0 to stop_pos (instructions + padding)
-        let mut instr_fn: Vec<Box<dyn FnTraitSet<T>>> = Vec::new();
-        let mut instr_end: Vec<usize> = Vec::new();
+
+        /* Pre-alloc vectors to store compiled instructions - necessary to avoid "multiple mutable
+           borrow" compile errors.
+
+           Additionally, as we are building-up compile cache vectors, they may have to
+           be re-allocated multiple times as they grow. To reduce the risk of this we estimate
+           the final instruction number - between 1 (no paddings at all) and 2 (a padding for each)
+           per original instruction on average - and pre-allocate with this capacity */
+
+        let instr_num_estimate = (1.8 * self.instr_list().len() as f64) as usize;
+        let mut instr_fns: Vec<Box<dyn FnTraitSet<T>>> = Vec::with_capacity(instr_num_estimate);
+        let mut instr_ends: Vec<usize> = Vec::with_capacity(instr_num_estimate);
 
         // Padding before the first instruction
         let first_start_pos = self.instr_list().first().unwrap().start_pos();
         if first_start_pos > 0 {
-            instr_fn.push(Box::new(ConstFn::new(self.dflt_val())));
-            instr_end.push(first_start_pos);
+            instr_fns.push(Box::new(ConstFn::new(self.dflt_val())));
+            instr_ends.push(first_start_pos);
         }
         // All instructions and paddings after them
         let mut instr_list = self.instr_list().iter().peekable();
@@ -224,8 +216,8 @@ where T: Clone + Debug + Send + Sync + 'static
             match instr.end_spec() {
                 Some((end_pos, keep_val)) => {
                     // The original instruction:
-                    instr_fn.push(instr.func().clone());
-                    instr_end.push(end_pos);
+                    instr_fns.push(instr.func().clone());
+                    instr_ends.push(end_pos);
                     // Padding:
                     if end_pos < next_edge {
                         // padding value
@@ -243,35 +235,24 @@ where T: Clone + Debug + Send + Sync + 'static
                             self.dflt_val()
                         };
                         // padding instruction
-                        instr_fn.push(Box::new(ConstFn::new(pad_val)));
-                        instr_end.push(next_edge);
+                        instr_fns.push(Box::new(ConstFn::new(pad_val)));
+                        instr_ends.push(next_edge);
                     }
                 },
                 None => {
-                    instr_fn.push(instr.func().clone());
-                    instr_end.push(next_edge);
+                    instr_fns.push(instr.func().clone());
+                    instr_ends.push(next_edge);
                 },
             }
         };
 
-        // ToDo: redundant
-        // (2) Transfer prepared instr_fn and instr_end into compile cache vectors
-        //     (merge adjacent instructions, if possible)
-        assert_eq!(instr_fn.len(), instr_end.len());
-        // No need to clear compile cache - it has already been cleaned in the very beginning
-        for i in 0..instr_end.len() {
-            self.compile_cache_fns_mut().push(instr_fn[i].clone());
-            self.compile_cache_ends_mut().push(instr_end[i]);
-            // if self.instr_fn().is_empty() || instr_fn[i] != *self.instr_fn().last().unwrap() {
-            //     self.instr_fn_().push(instr_fn[i].clone());
-            //     self.instr_end_().push(instr_end[i]);
-            // } else {
-            //     *self.instr_end_().last_mut().unwrap() = instr_end[i];
-            // }
-        }
-        // Verify transfer correctness
+        // (2) Transfer prepared `instr_fns` and `instr_ends` into compile cache vectors
+        *self.compile_cache_fns_mut() = instr_fns;
+        *self.compile_cache_ends_mut() = instr_ends;
+
+        // Consistency check
         assert_eq!(self.compile_cache_fns().len(), self.compile_cache_ends().len());
-        // assert_eq!(self.compiled_stop_pos().unwrap(), stop_pos);
+        assert_eq!(stop_pos, self.compile_cache_ends().last().unwrap().clone());
 
         *self.is_fresh_compiled_mut() = true;
         Ok(())
