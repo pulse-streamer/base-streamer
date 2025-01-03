@@ -219,7 +219,7 @@ where
     ///
     /// # Arguments
     /// - `stop_time`: The stop time used to compile the channels.
-    fn compile_base(&mut self, stop_time: f64) -> Result<f64, String> {
+    fn compile_base(&mut self, stop_time: f64) -> Result<(), String> {
         if !self.got_instructions() {
             // @Backend developers: whenever iterating over devices, you should always
             // filter by `got_instructions()` to only interact with active devices.
@@ -258,11 +258,10 @@ where
             chan.compile(stop_pos)?
         };
 
-        // Return the total run duration to generate all the samples:
-        Ok(self.compiled_stop_time())
+        Ok(())
     }
 
-    fn compile(&mut self, stop_time: f64) -> Result<f64, String> {
+    fn compile(&mut self, stop_time: f64) -> Result<(), String> {
         self.compile_base(stop_time)
     }
 
