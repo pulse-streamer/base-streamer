@@ -185,13 +185,10 @@ where T: Clone + Debug + Send + Sync + 'static
 
         // (1) Calculate exhaustive instruction coverage from 0 to stop_pos (instructions + padding)
 
-        /* Pre-alloc vectors to store compiled instructions - necessary to avoid "multiple mutable
-           borrow" compile errors.
-
-           Additionally, as we are building-up compile cache vectors, they may have to
-           be re-allocated multiple times as they grow. To reduce the risk of this we estimate
-           the final instruction number - between 1 (no paddings at all) and 2 (a padding for each)
-           per original instruction on average - and pre-allocate with this capacity */
+        /* Pre-alloc vectors with sufficient capacity to store all compiled instructions.
+           This avoids potential multiple re-allocations as we are building up the vectors
+           by pushing one instruction at a time. We estimate the final instruction number to be
+           between 1 (no paddings at all) and 2 (a padding for each) per original instruction on average */
 
         let instr_num_estimate = (1.8 * self.instr_list().len() as f64) as usize;
         let mut instr_fns: Vec<Box<dyn FnTraitSet<T>>> = Vec::with_capacity(instr_num_estimate);
@@ -222,15 +219,7 @@ where T: Clone + Debug + Send + Sync + 'static
                     if end_pos < next_edge {
                         // padding value
                         let pad_val = if keep_val {
-                            // Evaluate the function at t corresponding to end_pos
-                            let end_t = end_pos as f64 * self.clk_period();
-                            let t_arr = vec![end_t];
-                            let mut res_arr = vec![self.dflt_val()];
-                            instr.func().calc(
-                                &t_arr[..],
-                                &mut res_arr[..]
-                            );
-                            res_arr.to_vec().pop().unwrap()
+                            self.helper_eval_func(end_pos, instr.func())
                         } else {
                             self.dflt_val()
                         };
@@ -669,14 +658,6 @@ where T: Clone + Debug + Send + Sync + 'static
         // Convert `t` to the sample clock grid ticks right away
         let t_pos = (t * self.samp_rate()).round() as usize;
 
-        // Helper closure to evaluate `Box<dyn FnTraitSet<T>>` instances on single `usize` points
-        let helper_eval_func = |x: usize, func: &Box<dyn FnTraitSet<T>>| -> T {
-            let t_arr = vec![x as f64 * self.clk_period()];
-            let mut res_arr = vec![self.dflt_val()];
-            func.calc(&t_arr[..], &mut res_arr[..]);
-            res_arr[0].clone()
-        };
-
         // Find the closest preceding instruction which covers `t_pos` (or padding tail of which covers `t_pos`)
         // - the instruction with the greatest `stop_pos` which still satisfies `start_pos <= t_pos`
         // Since `self.instr_list' has type `BTreeSet<Instr<T>>`, we have to make-up an instruction to do the search
@@ -697,11 +678,11 @@ where T: Clone + Debug + Send + Sync + 'static
                 Some((end_pos, keep_val)) => {
                     if t_pos < end_pos {
                         // within [start_pos, end_pos) interval
-                        helper_eval_func(t_pos, prev_instr.func())
+                        self.helper_eval_func(t_pos, prev_instr.func())
                     } else {
                         // padding tail
                         if keep_val {
-                            helper_eval_func(end_pos, prev_instr.func())
+                            self.helper_eval_func(end_pos, prev_instr.func())
                         } else {
                             self.dflt_val()
                         }
@@ -709,7 +690,7 @@ where T: Clone + Debug + Send + Sync + 'static
                 },
                 None => {
                     // "go-this" instruction
-                    helper_eval_func(t_pos, prev_instr.func())
+                    self.helper_eval_func(t_pos, prev_instr.func())
                 }
             }
         } else {
@@ -718,6 +699,14 @@ where T: Clone + Debug + Send + Sync + 'static
             self.dflt_val()
         };
         Ok(val)
+    }
+
+    /// Helper function to evaluate `Box<dyn FnTraitSet<T>>` instances on single `usize` points
+    fn helper_eval_func(&self, x: usize, func: &Box<dyn FnTraitSet<T>>) -> T {
+        let t_arr = vec![x as f64 * self.clk_period()];
+        let mut res_arr = vec![self.dflt_val()];
+        func.calc(&t_arr[..], &mut res_arr[..]);
+        res_arr[0].clone()
     }
 }
 
