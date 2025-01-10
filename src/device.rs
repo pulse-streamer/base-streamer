@@ -288,7 +288,7 @@ where
             for msg in failed_chan_msgs {
                 full_err_msg.push_str(&format!("{msg}\n"))
             };
-            return Err(format!("[Dev {}] the following channels failed compile cache validation:\n{full_err_msg}", self.name()))
+            return Err(format!("[{}] The following channels failed compile cache validation:\n{full_err_msg}", self.name()))
         }
 
         let compiled_stop_positions: IndexMap<String, usize> = self
@@ -297,7 +297,7 @@ where
             .map(|chan| (chan.name(), chan.compiled_stop_pos()))
             .collect();
         if !compiled_stop_positions.values().all_equal() {
-            return Err(format!("[Dev {}] channels have different compiled stop positions: \n{compiled_stop_positions:?}", self.name()))
+            return Err(format!("[{}] Channels have different compiled stop positions: \n{compiled_stop_positions:?}", self.name()))
         }
 
         Ok(())
