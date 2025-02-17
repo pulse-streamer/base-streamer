@@ -32,7 +32,6 @@
 //!
 //! [`channel` module]: crate::channel
 
-use std::fmt::Debug;
 use ndarray::Array1;
 use indexmap::IndexMap;
 use itertools::Itertools;
@@ -77,31 +76,36 @@ use crate::channel::BaseChan;
 /// # Implementing [`BaseDevice`]:
 ///
 /// When creating a new type that represents an NI device, implementing this trait ensures that the type has all the necessary methods and behaviors typical of NI devices. Implementers can then extend or override these methods as necessary to provide device-specific behavior or optimizations.
-pub trait BaseDev<T, C>
-where
-    T: Clone + Debug + Send + Sync + 'static,  // output sample data type
-    C: BaseChan<T>                      // channel type
-{
+pub trait BaseDev {
+    /// Output channel type
+    type Chan: BaseChan;
+
     // Field methods
     fn name(&self) -> String;
     fn samp_rate(&self) -> f64;
 
-    fn chans(&self) -> &IndexMap<String, C>;
-    fn chans_mut(&mut self) -> &mut IndexMap<String, C>;
+    fn chans(&self) -> Vec<&Self::Chan>;
+    fn chans_mut(&mut self) -> Vec<&mut Self::Chan>;
 
     /// Shortcut to borrow channel instance by name
-    fn chan(&self, name: &str) -> &C {
-        if !self.chans().contains_key(name) {
-            panic!("Device {} does not have channel {}", self.name(), name)
+    fn chan(&self, name: &str) -> Result<&Self::Chan, String> {
+        let search_idx = self.chans().iter().position(|chan| chan.name() == name.to_string());
+
+        if let Some(idx) = search_idx {
+            Ok(self.chans().swap_remove(idx))
+        } else {
+            Err(format!("Device {} does not have channel {name}", self.name()))
         }
-        self.chans().get(name).unwrap()
     }
     /// Shortcut to mutably borrow channel instance by name
-    fn chan_mut(&mut self, name: &str) -> &mut C {
-        if !self.chans().contains_key(name) {
-            panic!("Device {} does not have channel {}", self.name(), name)
+    fn chan_mut(&mut self, name: &str) -> Result<&mut Self::Chan, String> {
+        let search_res = self.chans().iter().position(|chan| chan.name() == name.to_string());
+
+        if let Some(idx) = search_res {
+            Ok(self.chans_mut().swap_remove(idx))
+        } else {
+            Err(format!("Device {} does not have channel {name}", self.name()))
         }
-        self.chans_mut().get_mut(name).unwrap()
     }
 
     /// Returns sample clock period calculated as `1.0 / self.samp_rate()`
@@ -110,20 +114,20 @@ where
     }
 
     /// Adds a new channel to the device.
-    fn add_chan(&mut self, chan: C) -> Result<(), String> {
+    fn check_can_add_chan(&mut self, chan: &Self::Chan) -> Result<(), String> {
         if f64::abs(chan.samp_rate() - self.samp_rate()) >= 1e-10 {
             return Err(format!(
                 "Cannot add channel {} with samp_rate={} to device {} with a different samp_rate={}",
                 chan.name(), chan.samp_rate(), self.name(), self.samp_rate()
             ))
-        }
-        if self.chans().contains_key(&chan.name()) {
+        };
+        let chan_names: Vec<_> = self.chans().iter().map(|chan| chan.name()).collect();
+        if chan_names.contains(&chan.name()) {
             return Err(format!(
                 "There is already a channel with name {} registered. Registered channels are {:?}",
-                chan.name(), self.chans().keys()
+                chan.name(), chan_names
             ))
-        }
-        self.chans_mut().insert(chan.name(), chan);
+        };
         Ok(())
     }
 
@@ -139,7 +143,7 @@ where
             ))
         }
 
-        for chan in self.chans_mut().values_mut() {
+        for chan in self.chans_mut() {
             chan.add_reset_instr(reset_pos)?
         };
         Ok(())
@@ -148,19 +152,19 @@ where
     /// A device is marked edited if any of its editable channels are edited.
     /// Also see [`BaseChannel::is_edited`]
     fn got_instructions(&self) -> bool {
-        self.chans().values().any(|chan| chan.got_instructions())
+        self.chans().iter().any(|chan| chan.got_instructions())
     }
 
-    fn active_chans(&self) -> Vec<&C> {
+    fn active_chans(&self) -> Vec<&Self::Chan> {
         self.chans()
-            .values()
+            .drain(..)
             .filter(|chan| chan.got_instructions())
             .collect()
     }
 
-    fn active_chans_mut(&mut self) -> Vec<&mut C> {
+    fn active_chans_mut(&mut self) -> Vec<&mut Self::Chan> {
         self.chans_mut()
-            .values_mut()
+            .drain(..)
             .filter(|chan| chan.got_instructions())
             .collect()
     }
@@ -168,7 +172,7 @@ where
     /// Clears the edit-cache fields for all channels.
     /// Also see [`BaseChannel::clear_edit_cache`]
     fn clear_edit_cache(&mut self) {
-        for chan in self.chans_mut().values_mut() {
+        for chan in self.chans_mut() {
             chan.clear_edit_cache()
         }
         self.clear_compile_cache();
@@ -176,7 +180,7 @@ where
     /// Clears the compile-cache fields for all channels.
     /// Also see [`BaseChannel::clear_compile_cache`]
     fn clear_compile_cache_base(&mut self) {
-        for chan in self.chans_mut().values_mut() {
+        for chan in self.chans_mut() {
             chan.clear_compile_cache()
         }
     }
@@ -190,7 +194,7 @@ where
             panic!("Given stop_tick {stop_tick} is below the last instruction end_pos {}", self.last_instr_end_pos().unwrap())
         }
         self.chans()
-            .values()
+            .iter()
             .filter_map(|chan| chan.instr_list().last())
             .any(|last_instr| {
                 match last_instr.end_pos() {
@@ -354,10 +358,10 @@ where
 
     fn last_instr_end_pos(&self) -> Option<usize> {
         self.chans()
-            .values()
+            .iter()
             .filter_map(|chan| chan.last_instr_end_pos())
             .reduce(
-                |largest_so_far, this_end_pos| std::cmp::max(largest_so_far, this_end_pos)
+                |largest_so_far, this| std::cmp::max(largest_so_far, this)
             )
     }
 
@@ -398,7 +402,7 @@ where
     /// This method will panic if:
     /// - There are no channels that fulfill the provided requirements.
     /// - The device's task type is not AO (Analog Output) when initializing the buffer with time data.
-    fn calc_samps(&self, samp_buf: &mut [T], start_pos: usize, end_pos: usize) -> Result<(), String> {
+    fn calc_samps(&self, samp_buf: &mut [<Self::Chan as BaseChan>::Samp], start_pos: usize, end_pos: usize) -> Result<(), String> {
         // Sanity checks
         //  Do not launch panics in this function since it is used during streaming runtime. Return `Result::Err` instead.
         /*      During streaming, there is an active connection to the hardware driver.
