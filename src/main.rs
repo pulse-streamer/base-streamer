@@ -2,7 +2,7 @@
 // pub mod device;
 // pub mod streamer;
 // pub mod instruction;
-// pub mod utils;
+// pub mod fn_lib_tools;
 //
 // use nicompiler_backend::*;
 

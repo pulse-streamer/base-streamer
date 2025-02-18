@@ -11,7 +11,7 @@ name = "base_streamer"
 crate-type = ["lib"] # Specify the "lib" to make it usable for other rust libraries
 
 #[[bin]]
-#name = "nicompiler_backend_bin"
+#name = "test_bin"
 #path = "src/main.rs"
 #
 #[[bin]]
