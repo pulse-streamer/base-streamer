@@ -181,6 +181,7 @@
 
 extern crate ndarray;
 extern crate indexmap;
+extern crate itertools;
 
 pub mod fn_lib_tools;
 pub mod instruction;

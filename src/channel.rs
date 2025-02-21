@@ -112,33 +112,34 @@ impl<T: Debug> Debug for ConstFn<T> {
 ///
 /// This trait ensures that any type representing a channel offers the necessary functionality
 /// to interact with NI devices, ensuring consistency and safety in channel operations.
-pub trait BaseChan<T>
-where T: Clone + Debug + Send + Sync + 'static
-{
+pub trait BaseChan {
+    /// Output sample type
+    type Samp: Clone + Debug + Send + Sync + 'static;
+
     // Immutable field methods
     fn name(&self) -> String;
     fn samp_rate(&self) -> f64;
     /// The `default_value` trait specifies the signal value for not explicitly defined intervals.
-    fn dflt_val(&self) -> T;
-    fn rst_val(&self) -> T;
+    fn dflt_val(&self) -> Self::Samp;
+    fn rst_val(&self) -> Self::Samp;
 
     /// Provides a reference to the edit cache of instrbook list.
-    fn instr_list(&self) -> &BTreeSet<Instr<T>>;
+    fn instr_list(&self) -> &BTreeSet<Instr<Self::Samp>>;
     /// Returns the ending points of compiled instructions.
     fn compile_cache_ends(&self) -> &Vec<usize>;
     /// Retrieves the values of compiled instructions.
-    fn compile_cache_fns(&self) -> &Vec<Box<dyn FnTraitSet<T>>>;
+    fn compile_cache_fns(&self) -> &Vec<Box<dyn FnTraitSet<Self::Samp>>>;
     /// The `fresh_compiled` field is set to true by each [`BaseChannel::compile`] call and
     /// `false` by each [`BaseChannel::add_instr`].
     fn is_fresh_compiled(&self) -> bool;
 
     // Mutable field methods
     /// Mutable access to the instruction list.
-    fn instr_list_mut(&mut self) -> &mut BTreeSet<Instr<T>>;
+    fn instr_list_mut(&mut self) -> &mut BTreeSet<Instr<Self::Samp>>;
     /// Mutable access to the ending points of compiled instructions.
     fn compile_cache_ends_mut(&mut self) -> &mut Vec<usize>;
     /// Mutable access to the values of compiled instructions.
-    fn compile_cache_fns_mut(&mut self) -> &mut Vec<Box<dyn FnTraitSet<T>>>;
+    fn compile_cache_fns_mut(&mut self) -> &mut Vec<Box<dyn FnTraitSet<Self::Samp>>>;
     /// Mutable access to the `fresh_compiled` status.
     fn is_fresh_compiled_mut(&mut self) -> &mut bool;
 
@@ -191,7 +192,7 @@ where T: Clone + Debug + Send + Sync + 'static
            between 1 (no paddings at all) and 2 (a padding for each) per original instruction on average */
 
         let instr_num_estimate = (1.8 * self.instr_list().len() as f64) as usize;
-        let mut instr_fns: Vec<Box<dyn FnTraitSet<T>>> = Vec::with_capacity(instr_num_estimate);
+        let mut instr_fns: Vec<Box<dyn FnTraitSet<Self::Samp>>> = Vec::with_capacity(instr_num_estimate);
         let mut instr_ends: Vec<usize> = Vec::with_capacity(instr_num_estimate);
 
         // Padding before the first instruction
@@ -373,7 +374,7 @@ where T: Clone + Debug + Send + Sync + 'static
     /// "Channel port0/line0
     ///  Instruction InstrBook([CONST, {value: 1}], 5000000-15000000, false) overlaps with the next instruction InstrBook([CONST, {value: 1}], 5000000-5010000, true)"
     /// ```
-    fn add_instr(&mut self, func: Box<dyn FnTraitSet<T>>, t: f64, dur_spec: Option<(f64, bool)>) -> Result<(), String> {
+    fn add_instr(&mut self, func: Box<dyn FnTraitSet<Self::Samp>>, t: f64, dur_spec: Option<(f64, bool)>) -> Result<(), String> {
         // Sanity check - non-negative start time (compare with negative clock half-period to avoid virtual panics for nominal t=0.0)
         assert!(t > -0.5*self.clk_period(), "Attempted to insert an instruction at negative start time {t}");
 
@@ -482,7 +483,7 @@ where T: Clone + Debug + Send + Sync + 'static
         Ok(())
     }
     /// Utility function to add a constant instruction to the channel
-    fn constant(&mut self, val: T, t: f64, dur_spec: Option<(f64, bool)>) -> Result<(), String> {
+    fn constant(&mut self, val: Self::Samp, t: f64, dur_spec: Option<(f64, bool)>) -> Result<(), String> {
         self.add_instr(Box::new(ConstFn::new(val)), t, dur_spec)
     }
     fn add_reset_instr(&mut self, reset_pos: usize) -> Result<(), String> {
@@ -506,7 +507,7 @@ where T: Clone + Debug + Send + Sync + 'static
     /// (it can already be calculated knowing `start_pos`, `res_arr.len()`, and `self.samp_rate()`)
     /// but we require it for efficiency reason - the calling `BaseDev` calculates the `t_arr` once
     /// and then reuses it for every channel by lending a read-only view.
-    fn fill_samps(&self, start_pos: usize, res_arr: &mut [T], t_arr: &[f64]) -> Result<(), String> {
+    fn fill_samps(&self, start_pos: usize, res_arr: &mut [Self::Samp], t_arr: &[f64]) -> Result<(), String> {
         // Sanity checks (avoid launching panics and return errors instead):
         if !self.got_instructions() {
             return Err(format!("[Chan {}] fill_samps(): did not get any instructions", self.name()))
@@ -566,7 +567,7 @@ where T: Clone + Debug + Send + Sync + 'static
     /// Here samples are calculated at time points which don't necessarily match sample clock grid ticks.
     /// Typically, users will request n_samps which is smaller than the actual number of clock ticks
     /// between start_time and end_time because otherwise plotting may be extremely slow.
-    fn calc_nsamps(&self, n_samps: usize, start_time: Option<f64>, end_time: Option<f64>) -> Result<Vec<T>, String> {
+    fn calc_nsamps(&self, n_samps: usize, start_time: Option<f64>, end_time: Option<f64>) -> Result<Vec<Self::Samp>, String> {
         // Sanity checks
         if !self.got_instructions() {
             return Err(format!("Channel {} did not get any instructions", self.name()))
@@ -648,7 +649,7 @@ where T: Clone + Debug + Send + Sync + 'static
         Ok(res_arr)
     }
 
-    fn eval_point(&self, t: f64) -> Result<T, String> {
+    fn eval_point(&self, t: f64) -> Result<Self::Samp, String> {
         // Sanity check - time `t` should be non-negative
         // (compare against negative clock half-period to avoid virtual panics for nominal t=0.0)
         if t < -0.5*self.clk_period() {
@@ -660,7 +661,7 @@ where T: Clone + Debug + Send + Sync + 'static
 
         // Find the closest preceding instruction which covers `t_pos` (or padding tail of which covers `t_pos`)
         // - the instruction with the greatest `stop_pos` which still satisfies `start_pos <= t_pos`
-        // Since `self.instr_list' has type `BTreeSet<Instr<T>>`, we have to make-up an instruction to do the search
+        // Since `self.instr_list' has type `BTreeSet<Instr<Self::Samp>>`, we have to make-up an instruction to do the search
         let makeup_instr = Instr::new(t_pos, None, Box::new(ConstFn::new(self.dflt_val())));
         // The actual search (works because `Instr<T>` implements comparison by `start_pos`)
         let prev_instr = self.instr_list().range(..=makeup_instr).next_back();
@@ -701,8 +702,8 @@ where T: Clone + Debug + Send + Sync + 'static
         Ok(val)
     }
 
-    /// Helper function to evaluate `Box<dyn FnTraitSet<T>>` instances on single `usize` points
-    fn helper_eval_func(&self, x: usize, func: &Box<dyn FnTraitSet<T>>) -> T {
+    /// Helper function to evaluate `Box<dyn FnTraitSet<Self::Samp>` instances on single `usize` points
+    fn helper_eval_func(&self, x: usize, func: &Box<dyn FnTraitSet<Self::Samp>>) -> Self::Samp {
         let t_arr = vec![x as f64 * self.clk_period()];
         let mut res_arr = vec![self.dflt_val()];
         func.calc(&t_arr[..], &mut res_arr[..]);

@@ -1,104 +1,99 @@
-use std::fmt::Debug;
-use indexmap::IndexMap;
-
-use crate::channel::BaseChan;
 use crate::device::BaseDev;
 
-pub enum TypedDev<ADev, DDev> {
-    AO(ADev),
-    DO(DDev),
+/// Type-agnostic ("Tag") `BaseDevice` trait - set of methods which are not aware of the device's
+/// actual sample or channel types. `BaseStreamer` trait is only using these methods allowing for
+/// devices of different types being treated uniformly - as `dyn TagBaseDev` trait objects.
+pub trait TagBaseDev {
+    fn tag_name(&self) -> String;
+    fn tag_samp_rate(&self) -> f64;
+    fn tag_got_instructions(&self) -> bool;
+    fn tag_last_instr_end_time(&self) -> Option<f64>;
+    fn tag_compile(&mut self, stop_time: f64) -> Result<(), String>;
+    fn tag_clear_edit_cache(&mut self);
+    fn tag_clear_compile_cache(&mut self);
+    fn tag_validate_compile_cache(&self) -> Result<(), String>;
+    fn tag_compiled_stop_time(&self) -> f64;
+    fn tag_add_reset_instr(&mut self, reset_time: f64) -> Result<(), String>;
 }
 
-pub trait BaseStreamer<A, AChan, ADev, D, DChan, DDev>
-where
-    A: Clone + Debug + Send + Sync + 'static,
-    AChan: BaseChan<A>,
-    ADev: BaseDev<A, AChan>,
-    D: Clone + Debug + Send + Sync + 'static,
-    DChan: BaseChan<D>,
-    DDev: BaseDev<D, DChan>
-{
-    fn devs(&self) -> &IndexMap<String, TypedDev<ADev, DDev>>;
-    fn devs_mut(&mut self) -> &mut IndexMap<String, TypedDev<ADev, DDev>>;
-
-    fn add_ao_dev(&mut self, dev: ADev) -> Result<(), String> {
-        if self.devs().contains_key(&dev.name()) {
-            return Err(format!("There is already a device with name {} registered", dev.name()))
-        }
-        self.devs_mut().insert(dev.name(),TypedDev::AO(dev));
-        Ok(())
+impl<D: BaseDev> TagBaseDev for D {
+    fn tag_name(&self) -> String {
+        self.name()
     }
 
-    fn add_do_dev(&mut self, dev: DDev) -> Result<(), String> {
-        if self.devs().contains_key(&dev.name()) {
-            return Err(format!("There is already a device with name {} registered", dev.name()))
-        }
-        self.devs_mut().insert(dev.name(),TypedDev::DO(dev));
+    fn tag_samp_rate(&self) -> f64 {
+        self.samp_rate()
+    }
+
+    fn tag_got_instructions(&self) -> bool {
+        self.got_instructions()
+    }
+
+    fn tag_last_instr_end_time(&self) -> Option<f64> {
+        self.last_instr_end_time()
+    }
+
+    fn tag_compile(&mut self, stop_time: f64) -> Result<(), String> {
+        self.compile(stop_time)
+    }
+
+    fn tag_clear_edit_cache(&mut self) {
+        self.clear_edit_cache()
+    }
+
+    fn tag_clear_compile_cache(&mut self) {
+        self.clear_compile_cache()
+    }
+
+    fn tag_validate_compile_cache(&self) -> Result<(), String> {
+        self.validate_compile_cache()
+    }
+
+    fn tag_compiled_stop_time(&self) -> f64 {
+        self.compiled_stop_time()
+    }
+
+    fn tag_add_reset_instr(&mut self, reset_time: f64) -> Result<(), String> {
+        self.add_reset_instr(reset_time)
+    }
+}
+
+pub trait BaseStreamer {
+    fn devs(&self) -> Vec<&dyn TagBaseDev>;
+    fn devs_mut(&mut self) -> Vec<&mut dyn TagBaseDev>;
+
+    fn check_can_add_dev(&self, name: String) -> Result<(), String> {
+        let dev_names: Vec<_> = self.devs().iter().map(|dev| dev.tag_name()).collect();
+        if dev_names.contains(&name) {
+            return Err(format!("There is already a device with name {name} registered. Registered devices are {dev_names:?}"))
+        };
         Ok(())
     }
 
     fn last_instr_end_time(&self) -> Option<f64> {
         self.devs()
-            .values()
-            .filter_map(|typed_dev| match typed_dev {
-                TypedDev::AO(dev) => dev.last_instr_end_time(),
-                TypedDev::DO(dev) => dev.last_instr_end_time(),
-            })
-            .reduce(|largest_so_far, this_end_time| f64::max(largest_so_far, this_end_time))
-    }
-
-    fn total_run_time(&self) -> f64 {
-        // Sanity checks:
-        /* @Backend developers: before trying to access compile cache
-           you should always ensure the streamer actually got some instructions
-           and that compile cache is valid (up-to-date with the current edit cache).
-           Compile cache typically gets invalid due to users forgetting to re-compile after adding pulses.
-
-           Functions `got_instructions()` and `validate_compile_cache()` are meant to be the place
-           to do these checks gracefully. Other functions typically assume these checks have been done.
-           They likely still double check but may just panic if the tests fail like in the example below.
-        */
-        if !self.got_instructions() {
-            panic!("Streamer did not get any instructions")
-        }
-        self.validate_compile_cache().unwrap();
-
-        self.active_devs()
             .iter()
-            .map(|typed_dev| match typed_dev {
-                TypedDev::AO(dev) => dev.compiled_stop_time(),
-                TypedDev::DO(dev) => dev.compiled_stop_time(),
-            })
-            .reduce(|shortest_so_far, this_stop_time| f64::min(shortest_so_far, this_stop_time))
-            .unwrap()
+            .filter_map(|dev| dev.tag_last_instr_end_time())
+            .reduce(|largest_so_far, this| f64::max(largest_so_far, this))
     }
 
     fn got_instructions(&self) -> bool {
         self.devs()
-            .values()
-            .any(|typed_dev| match typed_dev {
-                TypedDev::AO(dev) => dev.got_instructions(),
-                TypedDev::DO(dev) => dev.got_instructions(),
-            })
+            .iter()
+            .any(|dev| dev.tag_got_instructions())
     }
 
-    fn active_devs(&self) -> Vec<&TypedDev<ADev, DDev>> {
+    fn active_devs(&self) -> Vec<&dyn TagBaseDev> {
         self.devs()
-            .values()
-            .filter(|typed_dev| match typed_dev {
-                TypedDev::AO(dev) => dev.got_instructions(),
-                TypedDev::DO(dev) => dev.got_instructions(),
-            })
+            .drain(..)
+            .filter(|dev| dev.tag_got_instructions())
             .collect()
     }
 
-    fn active_devs_mut(&mut self) -> Vec<&mut TypedDev<ADev, DDev>> {
+    fn active_devs_mut(&mut self) -> Vec<&mut dyn TagBaseDev> {
         self.devs_mut()
-            .values_mut()
-            .filter(|typed_dev| match typed_dev {
-                TypedDev::AO(dev) => dev.got_instructions(),
-                TypedDev::DO(dev) => dev.got_instructions(),
-            })
+            .drain(..)
+            .filter(|dev| dev.tag_got_instructions())
             .collect()
     }
 
@@ -120,28 +115,23 @@ where
             None => self.last_instr_end_time().unwrap(),
         };
 
-        for typed_dev in self.active_devs_mut() {
-            match typed_dev {
-                TypedDev::AO(dev) => dev.compile(stop_time)?,
-                TypedDev::DO(dev) => dev.compile(stop_time)?,
-            };
+        for dev in self.active_devs_mut() {
+            dev.tag_compile(stop_time)?;
         }
 
         Ok(self.total_run_time())
     }
 
     fn clear_compile_cache(&mut self) {
-        self.devs_mut().values_mut().for_each(|typed_dev| match typed_dev {
-            TypedDev::AO(dev) => dev.clear_compile_cache(),
-            TypedDev::DO(dev) => dev.clear_compile_cache(),
-        });
+        for dev in self.devs_mut() {
+            dev.tag_clear_compile_cache()
+        }
     }
 
     fn clear_edit_cache(&mut self) {
-        self.devs_mut().values_mut().for_each(|typed_dev| match typed_dev {
-            TypedDev::AO(dev) => dev.clear_edit_cache(),
-            TypedDev::DO(dev) => dev.clear_edit_cache(),
-        });
+        for dev in self.devs_mut() {
+            dev.tag_clear_edit_cache()
+        };
         self.clear_compile_cache();
     }
 
@@ -161,10 +151,7 @@ where
         let failed_dev_msgs: Vec<String> = self
             .active_devs()
             .iter()
-            .map(|typed_dev| match typed_dev {
-                TypedDev::AO(dev) => dev.validate_compile_cache(),
-                TypedDev::DO(dev) => dev.validate_compile_cache(),
-            })
+            .map(|dev| dev.tag_validate_compile_cache())
             .filter_map(|res| res.err())
             .collect();
         if !failed_dev_msgs.is_empty() {
@@ -176,6 +163,29 @@ where
         }
 
         Ok(())
+    }
+
+    fn total_run_time(&self) -> f64 {
+        // Sanity checks:
+        /* @Backend developers: before trying to access compile cache
+           you should always ensure the streamer actually got some instructions
+           and that compile cache is valid (up-to-date with the current edit cache).
+           Compile cache typically gets invalid due to users forgetting to re-compile after adding pulses.
+
+           Functions `got_instructions()` and `validate_compile_cache()` are meant to be the place
+           to do these checks gracefully. Other functions typically assume these checks have been done.
+           They likely still double check but may just panic if the tests fail like in the example below.
+        */
+        if !self.got_instructions() {
+            panic!("Streamer did not get any instructions")
+        }
+        self.validate_compile_cache().unwrap();
+
+        self.active_devs()
+            .iter()
+            .map(|dev| dev.tag_compiled_stop_time())
+            .reduce(|shortest_so_far, this| f64::min(shortest_so_far, this))
+            .unwrap()
     }
 
     fn add_reset_instr(&mut self, reset_time: Option<f64>) -> Result<(), String> {
@@ -193,11 +203,8 @@ where
             },
             None => self.last_instr_end_time().unwrap_or(0.0),
         };
-        for typed_dev in self.devs_mut().values_mut() {
-            match typed_dev {
-                TypedDev::AO(dev) => dev.add_reset_instr(reset_time)?,
-                TypedDev::DO(dev) => dev.add_reset_instr(reset_time)?,
-            }
+        for dev in self.devs_mut() {
+            dev.tag_add_reset_instr(reset_time)?
         };
         Ok(())
     }
