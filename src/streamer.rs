@@ -119,7 +119,7 @@ pub trait BaseStreamer {
             dev.tag_compile(stop_time)?;
         }
 
-        Ok(self.total_run_time())
+        Ok(self.shortest_dev_run_time())
     }
 
     fn clear_compile_cache(&mut self) {
@@ -165,7 +165,7 @@ pub trait BaseStreamer {
         Ok(())
     }
 
-    fn total_run_time(&self) -> f64 {
+    fn shortest_dev_run_time(&self) -> f64 {
         // Sanity checks:
         /* @Backend developers: before trying to access compile cache
            you should always ensure the streamer actually got some instructions
