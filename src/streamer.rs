@@ -188,6 +188,29 @@ pub trait BaseStreamer {
             .unwrap()
     }
 
+    fn longest_dev_run_time(&self) -> f64 {
+        // Sanity checks:
+        /* @Backend developers: before trying to access compile cache
+           you should always ensure the streamer actually got some instructions
+           and that compile cache is valid (up-to-date with the current edit cache).
+           Compile cache typically gets invalid due to users forgetting to re-compile after adding pulses.
+
+           Functions `got_instructions()` and `validate_compile_cache()` are meant to be the place
+           to do these checks gracefully. Other functions typically assume these checks have been done.
+           They likely still double check but may just panic if the tests fail like in the example below.
+        */
+        if !self.got_instructions() {
+            panic!("Streamer did not get any instructions")
+        }
+        self.validate_compile_cache().unwrap();
+
+        self.active_devs()
+            .iter()
+            .map(|dev| dev.tag_compiled_stop_time())
+            .reduce(|longest_so_far, this| f64::max(longest_so_far, this))
+            .unwrap()
+    }
+
     fn add_reset_instr(&mut self, reset_time: Option<f64>) -> Result<(), String> {
         let reset_time = match reset_time {
             Some(reset_time) => {
