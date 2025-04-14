@@ -97,6 +97,13 @@ pub trait BaseStreamer {
             .collect()
     }
 
+    fn active_dev_names(&self) -> Vec<String> {
+        self.active_devs()
+            .iter()
+            .map(|dev| dev.tag_name())
+            .collect()
+    }
+
     fn compile(&mut self, stop_time: Option<f64>) -> Result<f64, String> {
         if !self.got_instructions() {
             return Err(format!("Streamer did not get any instructions"))
